@@ -7,6 +7,7 @@ const storageKeys = {
 
 const accessHash = "dbe56f2d3bf0ee960d5950fbb280f4f874c0e9a141eaf2db1fcbe399e813daab";
 const galleryBucket = "gallery";
+const appVersion = "gallery-fallback-1";
 const requestTimeoutMs = 180000;
 const signedUrlTtlSeconds = 3600;
 const imagePlaceholder =
@@ -57,6 +58,15 @@ async function retryOnce(task) {
       throw error;
     });
   }
+}
+
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => resolve(reader.result));
+    reader.addEventListener("error", () => reject(new Error("Не получилось прочитать картинку.")));
+    reader.readAsDataURL(blob);
+  });
 }
 
 const words = [
@@ -477,19 +487,36 @@ async function getGalleryImageUrl(storagePath) {
     return cached.url;
   }
 
-  const { data, error } = await retryOnce(() =>
-    withTimeout(
-      sharedState.supabase.storage.from(galleryBucket).createSignedUrl(storagePath, signedUrlTtlSeconds),
-      "Картинка долго не отвечает."
-    )
-  );
+  try {
+    const { data, error } = await retryOnce(() =>
+      withTimeout(
+        sharedState.supabase.storage.from(galleryBucket).createSignedUrl(storagePath, signedUrlTtlSeconds),
+        "Картинка долго не отвечает."
+      )
+    );
 
-  if (error || !data?.signedUrl) throw error || new Error("Нет ссылки на картинку.");
-  imageUrlCache.set(storagePath, {
-    url: data.signedUrl,
-    expiresAt: Date.now() + (signedUrlTtlSeconds - 60) * 1000
-  });
-  return data.signedUrl;
+    if (error || !data?.signedUrl) throw error || new Error("Нет ссылки на картинку.");
+    imageUrlCache.set(storagePath, {
+      url: data.signedUrl,
+      expiresAt: Date.now() + (signedUrlTtlSeconds - 60) * 1000
+    });
+    return data.signedUrl;
+  } catch (signedUrlError) {
+    const { data, error } = await retryOnce(() =>
+      withTimeout(
+        sharedState.supabase.storage.from(galleryBucket).download(storagePath),
+        "Картинка долго не отвечает."
+      )
+    );
+
+    if (error || !data) throw error || signedUrlError;
+    const dataUrl = await blobToDataUrl(data);
+    imageUrlCache.set(storagePath, {
+      url: dataUrl,
+      expiresAt: Date.now() + 10 * 60 * 1000
+    });
+    return dataUrl;
+  }
 }
 
 async function loadGalleryImage(image, storagePath) {
@@ -605,7 +632,7 @@ async function renderGallery() {
   });
 
   setSyncStatus("Общая комната подключена.");
-  setGalleryStatus("Галерея подключена.");
+  setGalleryStatus(`Галерея подключена. Версия ${appVersion}.`);
 }
 
 function initGallery() {
