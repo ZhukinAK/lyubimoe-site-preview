@@ -150,8 +150,8 @@ main {
 }
 
 .hero-copy {
-  min-height: 430px;
-  padding: clamp(28px, 6vw, 74px);
+  min-height: 330px;
+  padding: clamp(24px, 4vw, 48px);
   border-radius: 32px;
 }
 
@@ -172,10 +172,10 @@ p {
 }
 
 h1 {
-  max-width: 760px;
-  margin-bottom: 18px;
-  font-size: clamp(2.25rem, 6vw, 5.4rem);
-  line-height: 0.98;
+  max-width: 640px;
+  margin-bottom: 16px;
+  font-size: clamp(2rem, 4.2vw, 3.85rem);
+  line-height: 1.04;
   letter-spacing: 0;
 }
 
@@ -192,10 +192,10 @@ h3 {
 }
 
 .lead {
-  max-width: 660px;
+  max-width: 580px;
   color: var(--muted);
-  font-size: 1.12rem;
-  line-height: 1.65;
+  font-size: 1.02rem;
+  line-height: 1.58;
 }
 
 .hero-actions,
@@ -682,8 +682,8 @@ textarea:focus {
   }
 
   h1 {
-    font-size: 2.35rem;
-    line-height: 1.04;
+    font-size: 2rem;
+    line-height: 1.08;
   }
 
   h2 {
