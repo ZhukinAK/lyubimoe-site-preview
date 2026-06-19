@@ -19,7 +19,7 @@ const alphabet = "абвгдеёжзийклмнопрстуфхцчшщъыьэ
 let hangman = {
   word: "",
   hint: "",
-  author: "Демо",
+  author: "Набор",
   guesser: "Вы",
   guessed: new Set(),
   mistakes: 0,
@@ -59,7 +59,7 @@ function pickWord() {
   hangman = {
     word: item.word,
     hint: item.hint,
-    author: "Демо",
+    author: "Набор",
     guesser: "вы вдвоём",
     guessed: new Set(),
     mistakes: 0,
@@ -102,8 +102,8 @@ function renderHangman() {
     wordEl.append(cell);
   });
 
-  if (hangman.author === "Демо") {
-    ownerEl.textContent = "Сейчас слово выбрано из демо-базы.";
+  if (hangman.author === "Набор") {
+    ownerEl.textContent = "Сейчас слово выбрано из общего набора.";
   } else if (hangman.author === "Даша") {
     ownerEl.textContent = "Даша загадала слово для тебя.";
   } else {
@@ -142,7 +142,7 @@ function renderHangman() {
     resultEl.textContent = `Раунд окончен. Было загадано слово: ${hangman.word}.`;
   } else {
     resultEl.textContent =
-      hangman.author === "Демо"
+      hangman.author === "Набор"
         ? "Выбирайте буквы по очереди, как будто играете в одной комнате."
         : "Слово спрятано. Теперь второй игрок выбирает буквы и смотрит только на подсказку.";
   }
@@ -190,8 +190,8 @@ function initGames() {
         document.querySelector("#coming-title").textContent = button.querySelector("strong").textContent;
         document.querySelector("#coming-text").textContent =
           selected === "balda"
-            ? "Здесь будет поле, ходы по очереди, слова и счёт. После Виселицы это главный кандидат."
-            : "Лёгкий режим с вопросами друг другу, который можно открывать во время созвона.";
+            ? "Поле, ходы по очереди, слова и счёт добавим следующим игровым блоком."
+            : "Лёгкий режим с вопросами друг другу для созвонов и спокойных вечеров.";
       }
     });
   });
@@ -269,11 +269,11 @@ function initGallery() {
 function defaultMemories() {
   return [
     {
-      text: "Идея: добавить кнопку случайного вопроса для вечернего созвона.",
+      text: "Идея для вечера: кнопка случайного вопроса во время созвона.",
       createdAt: new Date().toISOString()
     },
     {
-      text: "Будущий модуль: открытки, которые можно оставлять друг другу перед сном.",
+      text: "Открытки перед сном: маленькие сообщения, которые можно оставлять друг другу.",
       createdAt: new Date(Date.now() - 86400000).toISOString()
     }
   ];
@@ -374,7 +374,7 @@ function initLinks() {
     if (!title || !url) return;
 
     const links = readJson(storageKeys.links, defaultLinks());
-    links.unshift({ title, url, note: "Добавлено в быстрые ссылки." });
+    links.unshift({ title, url, note: "В быстрых ссылках." });
     writeJson(storageKeys.links, links.slice(0, 12));
     event.target.reset();
     renderLinks();
