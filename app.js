@@ -20,6 +20,13 @@ let sharedState = {
   realtimeChannel: null
 };
 
+function setSyncStatus(message) {
+  const status = document.querySelector("#sync-status");
+  if (status) {
+    status.textContent = message;
+  }
+}
+
 const words = [
   { word: "объятие", hint: "То, чего особенно не хватает на расстоянии" },
   { word: "письмо", hint: "Можно отправить даже без конверта" },
@@ -159,6 +166,7 @@ function initAccessGate() {
 function startSharedRoom() {
   if (sharedState.initialized || !sharedState.roomId) return;
   sharedState.initialized = true;
+  setSyncStatus("Общая комната подключена.");
   initGallery();
   initMemories();
   initRealtime();
@@ -425,6 +433,7 @@ async function renderGallery() {
   } catch {
     renderGalleryEmpty(grid);
     updateGalleryCounter(0);
+    setSyncStatus("Не получилось прочитать общую галерею.");
     return;
   }
 
@@ -583,6 +592,7 @@ async function renderMemories() {
     memories = await getMemories();
   } catch {
     renderMemoriesEmpty(timeline);
+    setSyncStatus("Не получилось прочитать общую ленту.");
     return;
   }
 
@@ -639,10 +649,12 @@ function initMemories() {
       .then(async ({ error }) => {
         submitButton.disabled = false;
         if (error) {
+          setSyncStatus(`Не получилось сохранить запись: ${error.message}`);
           alert("Не получилось сохранить запись.");
           return;
         }
         input.value = "";
+        setSyncStatus("Запись сохранена в общей комнате.");
         await renderMemories();
       });
   });
