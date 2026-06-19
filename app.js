@@ -371,12 +371,22 @@ function defaultMemories() {
   ];
 }
 
+function deleteMemoryItem(id) {
+  const memories = readJson(storageKeys.memories, defaultMemories());
+  writeJson(
+    storageKeys.memories,
+    memories.filter((item, index) => (item.id || String(index)) !== id)
+  );
+  renderMemories();
+}
+
 function renderMemories() {
   const memories = readJson(storageKeys.memories, defaultMemories());
   const timeline = document.querySelector("#timeline");
   timeline.innerHTML = "";
 
-  memories.forEach((item) => {
+  memories.forEach((item, index) => {
+    const itemId = item.id || String(index);
     const card = document.createElement("article");
     card.className = "memory-card";
     const time = document.createElement("time");
@@ -387,7 +397,17 @@ function renderMemories() {
     });
     const text = document.createElement("p");
     text.textContent = item.text;
-    card.append(time, text);
+    const deleteButton = document.createElement("button");
+    deleteButton.className = "memory-delete";
+    deleteButton.type = "button";
+    deleteButton.textContent = "Удалить";
+    deleteButton.setAttribute("aria-label", "Удалить запись из воспоминаний");
+    deleteButton.addEventListener("click", () => {
+      if (confirm("Удалить эту запись?")) {
+        deleteMemoryItem(itemId);
+      }
+    });
+    card.append(time, text, deleteButton);
     timeline.append(card);
   });
 }
@@ -400,7 +420,7 @@ function initMemories() {
     if (!text) return;
 
     const memories = readJson(storageKeys.memories, defaultMemories());
-    memories.unshift({ text, createdAt: new Date().toISOString() });
+    memories.unshift({ id: createId(), text, createdAt: new Date().toISOString() });
     writeJson(storageKeys.memories, memories.slice(0, 20));
     input.value = "";
     renderMemories();
