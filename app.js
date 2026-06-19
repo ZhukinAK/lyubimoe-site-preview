@@ -1,5 +1,6 @@
 const storageKeys = {
   auth: "twoplace.auth",
+  room: "twoplace.room",
   gallery: "twoplace.gallery",
   memories: "twoplace.memories",
   played: "twoplace.played",
@@ -7,6 +8,17 @@ const storageKeys = {
 };
 
 const accessHash = "dbe56f2d3bf0ee960d5950fbb280f4f874c0e9a141eaf2db1fcbe399e813daab";
+const galleryBucket = "gallery";
+const signedUrlTtlSeconds = 60 * 60;
+
+let sharedState = {
+  supabase: null,
+  roomId: null,
+  initialized: false,
+  galleryReady: false,
+  memoriesReady: false,
+  realtimeChannel: null
+};
 
 const words = [
   { word: "объятие", hint: "То, чего особенно не хватает на расстоянии" },
@@ -45,6 +57,28 @@ function createId() {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+function getSupabaseConfig() {
+  const config = window.LYUBIMOE_SUPABASE || {};
+  return {
+    url: (config.url || "").trim(),
+    anonKey: (config.anonKey || "").trim(),
+    roomSlug: (config.roomSlug || "preview").trim()
+  };
+}
+
+function getSupabaseClient() {
+  const config = getSupabaseConfig();
+  if (!config.url || !config.anonKey || !window.supabase?.createClient) {
+    return null;
+  }
+
+  if (!sharedState.supabase) {
+    sharedState.supabase = window.supabase.createClient(config.url, config.anonKey);
+  }
+
+  return sharedState.supabase;
+}
+
 async function hashText(text) {
   const bytes = new TextEncoder().encode(text);
   const digest = await crypto.subtle.digest("SHA-256", bytes);
@@ -59,28 +93,76 @@ function unlockRoom() {
 function initAccessGate() {
   const form = document.querySelector("#auth-form");
   const input = document.querySelector("#auth-passphrase");
+  const submit = form.querySelector("button");
   const error = document.querySelector("#auth-error");
+  const supabaseClient = getSupabaseClient();
 
-  if (localStorage.getItem(storageKeys.auth) === accessHash) {
-    unlockRoom();
+  if (!supabaseClient) {
+    error.textContent = "Нужно заполнить Supabase URL и anon key в supabase-config.js.";
+    submit.disabled = true;
     return;
   }
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     error.textContent = "";
+    submit.disabled = true;
 
-    const hash = await hashText(input.value.trim());
-    if (hash === accessHash) {
+    try {
+      const config = getSupabaseConfig();
+      let { data: sessionData } = await supabaseClient.auth.getSession();
+      if (!sessionData.session) {
+        const { error: signInError } = await supabaseClient.auth.signInAnonymously();
+        if (signInError) throw signInError;
+      }
+
+      const hash = await hashText(input.value.trim());
+      if (hash !== accessHash) {
+        throw new Error("Не та фраза.");
+      }
+
+      const { data: roomId, error: joinError } = await supabaseClient.rpc("join_room", {
+        p_slug: config.roomSlug,
+        p_passphrase: input.value.trim()
+      });
+      if (joinError) throw joinError;
+
+      sharedState.roomId = roomId;
       localStorage.setItem(storageKeys.auth, accessHash);
+      localStorage.setItem(storageKeys.room, roomId);
       input.value = "";
       unlockRoom();
-      return;
+      startSharedRoom();
+    } catch (errorValue) {
+      error.textContent = errorValue.message || "Не получилось войти.";
+      input.select();
+    } finally {
+      submit.disabled = false;
     }
-
-    error.textContent = "Не та фраза.";
-    input.select();
   });
+
+  if (localStorage.getItem(storageKeys.auth) === accessHash && localStorage.getItem(storageKeys.room)) {
+    supabaseClient.auth.getSession().then(({ data }) => {
+      if (!data.session) {
+        localStorage.removeItem(storageKeys.auth);
+        localStorage.removeItem(storageKeys.room);
+        return;
+      }
+
+      sharedState.roomId = localStorage.getItem(storageKeys.room);
+      unlockRoom();
+      startSharedRoom();
+    });
+  }
+}
+
+function startSharedRoom() {
+  if (sharedState.initialized || !sharedState.roomId) return;
+  sharedState.initialized = true;
+  initGallery();
+  initMemories();
+  initRealtime();
+  updateCounters();
 }
 
 function setRoute(route) {
@@ -243,7 +325,7 @@ function initGames() {
   pickWord();
 }
 
-function fileToGalleryImage(file, onReady) {
+function fileToGalleryImage(file, onReady, onError) {
   const reader = new FileReader();
   reader.addEventListener("load", () => {
     const image = new Image();
@@ -258,38 +340,101 @@ function fileToGalleryImage(file, onReady) {
       canvas.width = width;
       canvas.height = height;
       context.drawImage(image, 0, 0, width, height);
-      onReady(canvas.toDataURL("image/jpeg", 0.86));
+      canvas.toBlob((blob) => {
+        if (!blob) {
+          alert("Не получилось подготовить картинку.");
+          onError?.();
+          return;
+        }
+        onReady(blob);
+      }, "image/jpeg", 0.86);
     });
     image.src = reader.result;
   });
   reader.readAsDataURL(file);
 }
 
-function deleteGalleryItem(id) {
-  const gallery = readJson(storageKeys.gallery, []);
-  writeJson(
-    storageKeys.gallery,
-    gallery.filter((item, index) => (item.id || String(index)) !== id)
-  );
-  renderGallery();
+async function deleteGalleryItem(id) {
+  if (!sharedState.supabase || !sharedState.roomId) return;
+  const { error } = await sharedState.supabase
+    .from("gallery_items")
+    .update({ deleted_at: new Date().toISOString() })
+    .eq("id", id)
+    .eq("room_id", sharedState.roomId);
+
+  if (error) {
+    alert("Не получилось удалить карточку.");
+    return;
+  }
+
+  await renderGallery();
 }
 
-function renderGallery() {
-  const gallery = readJson(storageKeys.gallery, []);
+function renderGalleryEmpty(grid) {
+  const card = document.createElement("article");
+  card.className = "gallery-card";
+  const placeholder = document.createElement("div");
+  placeholder.className = "placeholder-art";
+  placeholder.textContent = "Галерея";
+  const body = document.createElement("div");
+  body.className = "gallery-card-body";
+  const caption = document.createElement("p");
+  caption.textContent = "Здесь будут фотографии, мемы и случайные находки.";
+  body.append(caption);
+  card.append(placeholder, body);
+  grid.append(card);
+}
+
+async function getGalleryItems() {
+  const { data, error } = await sharedState.supabase
+    .from("gallery_items")
+    .select("id, caption, storage_path, created_at")
+    .eq("room_id", sharedState.roomId)
+    .is("deleted_at", null)
+    .order("created_at", { ascending: false });
+
+  if (error) throw error;
+
+  return Promise.all(
+    data.map(async (item) => {
+      const { data: signedData, error: signedError } = await sharedState.supabase.storage
+        .from(galleryBucket)
+        .createSignedUrl(item.storage_path, signedUrlTtlSeconds);
+
+      return {
+        ...item,
+        src: signedError ? "" : signedData.signedUrl
+      };
+    })
+  );
+}
+
+async function renderGallery() {
   const grid = document.querySelector("#gallery-grid");
   grid.innerHTML = "";
 
-  const items = gallery.length
-    ? gallery
-    : [
-        {
-          caption: "Здесь будут фотографии, мемы и случайные находки.",
-          src: ""
-        }
-      ];
+  if (!sharedState.supabase || !sharedState.roomId) {
+    renderGalleryEmpty(grid);
+    updateGalleryCounter(0);
+    return;
+  }
 
-  items.forEach((item, index) => {
-    const itemId = item.id || String(index);
+  let items = [];
+  try {
+    items = await getGalleryItems();
+  } catch {
+    renderGalleryEmpty(grid);
+    updateGalleryCounter(0);
+    return;
+  }
+
+  if (!items.length) {
+    renderGalleryEmpty(grid);
+    updateGalleryCounter(0);
+    return;
+  }
+
+  items.forEach((item) => {
     const card = document.createElement("article");
     card.className = "gallery-card";
 
@@ -309,89 +454,149 @@ function renderGallery() {
     body.className = "gallery-card-body";
     const caption = document.createElement("p");
     caption.textContent = item.caption || "Без подписи";
-
-    if (gallery.length) {
-      const deleteButton = document.createElement("button");
-      deleteButton.className = "gallery-delete";
-      deleteButton.type = "button";
-      deleteButton.textContent = "Удалить";
-      deleteButton.setAttribute("aria-label", `Удалить из галереи: ${item.caption || "изображение"}`);
-      deleteButton.addEventListener("click", () => {
-        if (confirm("Удалить эту карточку из галереи?")) {
-          deleteGalleryItem(itemId);
-        }
-      });
-      body.append(caption, deleteButton);
-    } else {
-      body.append(caption);
-    }
+    const deleteButton = document.createElement("button");
+    deleteButton.className = "gallery-delete";
+    deleteButton.type = "button";
+    deleteButton.textContent = "Удалить";
+    deleteButton.setAttribute("aria-label", `Удалить из галереи: ${item.caption || "изображение"}`);
+    deleteButton.addEventListener("click", () => {
+      if (confirm("Удалить эту карточку из галереи?")) {
+        deleteGalleryItem(item.id);
+      }
+    });
+    body.append(caption, deleteButton);
 
     card.append(body);
     grid.append(card);
   });
 
-  updateCounters();
+  updateGalleryCounter(items.length);
 }
 
 function initGallery() {
+  if (sharedState.galleryReady) {
+    renderGallery();
+    return;
+  }
+  sharedState.galleryReady = true;
+
   document.querySelector("#gallery-form").addEventListener("submit", (event) => {
     event.preventDefault();
     const file = document.querySelector("#gallery-file").files[0];
     const caption = document.querySelector("#gallery-caption").value.trim();
-    if (!file && !caption) return;
+    if (!file || !sharedState.supabase || !sharedState.roomId) return;
 
-    const saveItem = (src) => {
-      const gallery = readJson(storageKeys.gallery, []);
-      gallery.unshift({ id: createId(), src, caption, createdAt: new Date().toISOString() });
-      writeJson(storageKeys.gallery, gallery.slice(0, 18));
+    const submitButton = event.target.querySelector("button");
+    submitButton.disabled = true;
+
+    const saveItem = async (blob) => {
+      const id = createId();
+      const storagePath = `${sharedState.roomId}/${id}.jpg`;
+      const { error: uploadError } = await sharedState.supabase.storage
+        .from(galleryBucket)
+        .upload(storagePath, blob, {
+          contentType: "image/jpeg",
+          upsert: false
+        });
+
+      if (uploadError) {
+        submitButton.disabled = false;
+        alert("Не получилось загрузить картинку.");
+        return;
+      }
+
+      const { error: insertError } = await sharedState.supabase.from("gallery_items").insert({
+        room_id: sharedState.roomId,
+        caption,
+        storage_path: storagePath
+      });
+
+      submitButton.disabled = false;
+      if (insertError) {
+        alert("Не получилось добавить карточку.");
+        return;
+      }
+
       event.target.reset();
-      renderGallery();
+      await renderGallery();
     };
 
-    if (!file) {
-      saveItem("");
-      return;
-    }
-
-    fileToGalleryImage(file, saveItem);
+    fileToGalleryImage(file, saveItem, () => {
+      submitButton.disabled = false;
+    });
   });
   renderGallery();
 }
 
 function defaultMemories() {
-  return [
-    {
-      text: "Идея для вечера: кнопка случайного вопроса во время созвона.",
-      createdAt: new Date().toISOString()
-    },
-    {
-      text: "Открытки перед сном: маленькие сообщения, которые можно оставлять друг другу.",
-      createdAt: new Date(Date.now() - 86400000).toISOString()
-    }
-  ];
+  return [];
 }
 
-function deleteMemoryItem(id) {
-  const memories = readJson(storageKeys.memories, defaultMemories());
-  writeJson(
-    storageKeys.memories,
-    memories.filter((item, index) => (item.id || String(index)) !== id)
-  );
-  renderMemories();
+async function deleteMemoryItem(id) {
+  if (!sharedState.supabase || !sharedState.roomId) return;
+  const { error } = await sharedState.supabase
+    .from("memories")
+    .update({ deleted_at: new Date().toISOString() })
+    .eq("id", id)
+    .eq("room_id", sharedState.roomId);
+
+  if (error) {
+    alert("Не получилось удалить запись.");
+    return;
+  }
+
+  await renderMemories();
 }
 
-function renderMemories() {
-  const memories = readJson(storageKeys.memories, defaultMemories());
+function renderMemoriesEmpty(timeline) {
+  const card = document.createElement("article");
+  card.className = "memory-card";
+  const text = document.createElement("p");
+  text.textContent = "Пока тут тихо.";
+  card.append(text);
+  timeline.append(card);
+}
+
+async function getMemories() {
+  const { data, error } = await sharedState.supabase
+    .from("memories")
+    .select("id, text, created_at")
+    .eq("room_id", sharedState.roomId)
+    .is("deleted_at", null)
+    .order("created_at", { ascending: false });
+
+  if (error) throw error;
+  return data;
+}
+
+async function renderMemories() {
   const timeline = document.querySelector("#timeline");
   timeline.innerHTML = "";
 
-  memories.forEach((item, index) => {
-    const itemId = item.id || String(index);
+  if (!sharedState.supabase || !sharedState.roomId) {
+    renderMemoriesEmpty(timeline);
+    return;
+  }
+
+  let memories = [];
+  try {
+    memories = await getMemories();
+  } catch {
+    renderMemoriesEmpty(timeline);
+    return;
+  }
+
+  if (!memories.length) {
+    renderMemoriesEmpty(timeline);
+    return;
+  }
+
+  memories.forEach((item) => {
     const card = document.createElement("article");
     card.className = "memory-card";
     const time = document.createElement("time");
-    time.dateTime = item.createdAt;
-    time.textContent = new Date(item.createdAt).toLocaleDateString("ru-RU", {
+    time.dateTime = item.created_at;
+    time.textContent = new Date(item.created_at).toLocaleDateString("ru-RU", {
       day: "numeric",
       month: "long"
     });
@@ -404,7 +609,7 @@ function renderMemories() {
     deleteButton.setAttribute("aria-label", "Удалить запись из воспоминаний");
     deleteButton.addEventListener("click", () => {
       if (confirm("Удалить эту запись?")) {
-        deleteMemoryItem(itemId);
+        deleteMemoryItem(item.id);
       }
     });
     card.append(time, text, deleteButton);
@@ -413,19 +618,67 @@ function renderMemories() {
 }
 
 function initMemories() {
+  if (sharedState.memoriesReady) {
+    renderMemories();
+    return;
+  }
+  sharedState.memoriesReady = true;
+
   document.querySelector("#memory-form").addEventListener("submit", (event) => {
     event.preventDefault();
     const input = document.querySelector("#memory-text");
     const text = input.value.trim();
-    if (!text) return;
+    if (!text || !sharedState.supabase || !sharedState.roomId) return;
 
-    const memories = readJson(storageKeys.memories, defaultMemories());
-    memories.unshift({ id: createId(), text, createdAt: new Date().toISOString() });
-    writeJson(storageKeys.memories, memories.slice(0, 20));
-    input.value = "";
-    renderMemories();
+    const submitButton = event.target.querySelector("button");
+    submitButton.disabled = true;
+
+    sharedState.supabase
+      .from("memories")
+      .insert({ room_id: sharedState.roomId, text })
+      .then(async ({ error }) => {
+        submitButton.disabled = false;
+        if (error) {
+          alert("Не получилось сохранить запись.");
+          return;
+        }
+        input.value = "";
+        await renderMemories();
+      });
   });
   renderMemories();
+}
+
+function initRealtime() {
+  if (!sharedState.supabase || !sharedState.roomId) return;
+
+  if (sharedState.realtimeChannel) {
+    sharedState.supabase.removeChannel(sharedState.realtimeChannel);
+  }
+
+  sharedState.realtimeChannel = sharedState.supabase
+    .channel(`room-${sharedState.roomId}`)
+    .on(
+      "postgres_changes",
+      {
+        event: "*",
+        schema: "public",
+        table: "gallery_items",
+        filter: `room_id=eq.${sharedState.roomId}`
+      },
+      () => renderGallery()
+    )
+    .on(
+      "postgres_changes",
+      {
+        event: "*",
+        schema: "public",
+        table: "memories",
+        filter: `room_id=eq.${sharedState.roomId}`
+      },
+      () => renderMemories()
+    )
+    .subscribe();
 }
 
 function defaultLinks() {
@@ -494,16 +747,16 @@ function initLinks() {
   renderLinks();
 }
 
+function updateGalleryCounter(count) {
+  document.querySelector("#gallery-count").textContent = String(count);
+}
+
 function updateCounters() {
-  const gallery = readJson(storageKeys.gallery, []);
-  document.querySelector("#gallery-count").textContent = String(gallery.length);
   document.querySelector("#played-count").textContent = localStorage.getItem(storageKeys.played) || "0";
 }
 
 initAccessGate();
 initRouter();
 initGames();
-initGallery();
-initMemories();
 initLinks();
 updateCounters();
