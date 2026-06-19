@@ -21,11 +21,19 @@ let sharedState = {
   realtimeChannel: null
 };
 
-function setSyncStatus(message) {
-  const status = document.querySelector("#sync-status");
+function setStatus(selector, message) {
+  const status = document.querySelector(selector);
   if (status) {
     status.textContent = message;
   }
+}
+
+function setSyncStatus(message) {
+  setStatus("#sync-status", message);
+}
+
+function setGalleryStatus(message) {
+  setStatus("#gallery-status", message);
 }
 
 function withTimeout(promise, message = "Запрос занял слишком много времени.") {
@@ -46,6 +54,15 @@ async function retryOnce(task) {
       throw error;
     });
   }
+}
+
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => resolve(reader.result));
+    reader.addEventListener("error", () => reject(new Error("Не получилось прочитать картинку.")));
+    reader.readAsDataURL(blob);
+  });
 }
 
 const words = [
@@ -354,6 +371,28 @@ function initGames() {
 }
 
 function fileToGalleryImage(file, onReady, onError) {
+  let completed = false;
+  const fallbackTimer = setTimeout(() => {
+    if (!completed) {
+      completed = true;
+      onReady(file);
+    }
+  }, 6000);
+
+  const finish = (blob) => {
+    if (completed) return;
+    completed = true;
+    clearTimeout(fallbackTimer);
+    onReady(blob);
+  };
+
+  const fail = () => {
+    if (completed) return;
+    completed = true;
+    clearTimeout(fallbackTimer);
+    onError?.();
+  };
+
   const reader = new FileReader();
   reader.addEventListener("load", () => {
     const image = new Image();
@@ -370,15 +409,16 @@ function fileToGalleryImage(file, onReady, onError) {
       context.drawImage(image, 0, 0, width, height);
       canvas.toBlob((blob) => {
         if (!blob) {
-          alert("Не получилось подготовить картинку.");
-          onError?.();
+          finish(file);
           return;
         }
-        onReady(blob);
+        finish(blob);
       }, "image/jpeg", 0.78);
     });
+    image.addEventListener("error", () => finish(file));
     image.src = reader.result;
   });
+  reader.addEventListener("error", fail);
   reader.readAsDataURL(file);
 }
 
@@ -413,6 +453,13 @@ function renderGalleryEmpty(grid) {
   grid.append(card);
 }
 
+function getUploadExtension(blob) {
+  if (blob.type === "image/png") return "png";
+  if (blob.type === "image/webp") return "webp";
+  if (blob.type === "image/gif") return "gif";
+  return "jpg";
+}
+
 async function getGalleryItems() {
   const { data, error } = await retryOnce(() =>
     withTimeout(
@@ -443,16 +490,17 @@ async function getGalleryImageUrl(storagePath) {
   );
 
   if (error || !data) throw error || new Error("Нет картинки.");
-  const objectUrl = URL.createObjectURL(data);
-  imageUrlCache.set(storagePath, objectUrl);
-  return objectUrl;
+  const dataUrl = await blobToDataUrl(data);
+  imageUrlCache.set(storagePath, dataUrl);
+  return dataUrl;
 }
 
 async function loadGalleryImage(image, storagePath) {
   try {
     image.src = await getGalleryImageUrl(storagePath);
-  } catch {
+  } catch (error) {
     image.alt = "Картинка пока не загрузилась";
+    setGalleryStatus(`Картинка пока не загрузилась: ${error.message}`);
   }
 }
 
@@ -488,21 +536,25 @@ async function renderGallery() {
 
   if (!sharedState.supabase || !sharedState.roomId) {
     renderGalleryEmpty(grid);
+    setGalleryStatus("Галерея ждёт входа.");
     return;
   }
 
   let items = [];
   try {
+    setGalleryStatus("Загружаем галерею...");
     setSyncStatus("Загружаем общую комнату...");
     items = await getGalleryItems();
   } catch {
     renderGalleryEmpty(grid);
     setSyncStatus("Не получилось прочитать общую галерею.");
+    setGalleryStatus("Не получилось прочитать галерею.");
     return;
   }
 
   if (!items.length) {
     renderGalleryEmpty(grid);
+    setGalleryStatus("Галерея пока пустая.");
     return;
   }
 
@@ -540,6 +592,7 @@ async function renderGallery() {
   });
 
   setSyncStatus("Общая комната подключена.");
+  setGalleryStatus("Галерея подключена.");
 }
 
 function initGallery() {
@@ -557,15 +610,18 @@ function initGallery() {
 
     const submitButton = event.target.querySelector("button");
     submitButton.disabled = true;
+    setGalleryStatus("Готовим картинку...");
 
     const saveItem = async (blob) => {
       const id = createId();
-      const storagePath = `${sharedState.roomId}/${id}.jpg`;
+      const extension = getUploadExtension(blob);
+      const storagePath = `${sharedState.roomId}/${id}.${extension}`;
       try {
         setSyncStatus("Загружаем картинку...");
+        setGalleryStatus("Загружаем картинку...");
         const { error: uploadError } = await withTimeout(
           sharedState.supabase.storage.from(galleryBucket).upload(storagePath, blob, {
-            contentType: "image/jpeg",
+            contentType: blob.type || "image/jpeg",
             upsert: false
           }),
           "Загрузка картинки долго не отвечает."
@@ -586,10 +642,12 @@ function initGallery() {
 
         event.target.reset();
         setSyncStatus("Картинка сохранена в общей комнате.");
+        setGalleryStatus("Картинка сохранена.");
         await renderGallery();
       } catch (error) {
         submitButton.disabled = false;
         setSyncStatus(`Не получилось добавить карточку: ${error.message}`);
+        setGalleryStatus(`Не получилось добавить карточку: ${error.message}`);
         alert("Не получилось загрузить картинку.");
         return;
       }
@@ -599,6 +657,7 @@ function initGallery() {
 
     fileToGalleryImage(file, saveItem, () => {
       submitButton.disabled = false;
+      setGalleryStatus("Не получилось подготовить картинку.");
     });
   });
   renderGallery();
@@ -714,6 +773,7 @@ function initMemories() {
 
     const submitButton = event.target.querySelector("button");
     submitButton.disabled = true;
+    setSyncStatus("Сохраняем запись...");
 
     withTimeout(
       sharedState.supabase.from("memories").insert({ room_id: sharedState.roomId, text }),
