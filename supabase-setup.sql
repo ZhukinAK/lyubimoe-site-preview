@@ -49,9 +49,9 @@ on conflict (slug) do update
 set passphrase_hash = excluded.passphrase_hash;
 
 insert into storage.buckets (id, name, public)
-values ('gallery', 'gallery', true)
+values ('gallery', 'gallery', false)
 on conflict (id) do update
-set public = true;
+set public = false;
 
 alter table public.rooms enable row level security;
 alter table public.room_members enable row level security;

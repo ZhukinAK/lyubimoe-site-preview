@@ -8,8 +8,10 @@ const storageKeys = {
 const accessHash = "dbe56f2d3bf0ee960d5950fbb280f4f874c0e9a141eaf2db1fcbe399e813daab";
 const galleryBucket = "gallery";
 const requestTimeoutMs = 180000;
+const signedUrlTtlSeconds = 3600;
 const imagePlaceholder =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'%3E%3Crect width='1' height='1' fill='%23f8fbff'/%3E%3C/svg%3E";
+const imageUrlCache = new Map();
 
 let sharedState = {
   supabase: null,
@@ -469,23 +471,46 @@ async function getGalleryItems() {
   return data;
 }
 
-function getGalleryImageUrl(storagePath) {
-  return sharedState.supabase.storage.from(galleryBucket).getPublicUrl(storagePath).data.publicUrl;
+async function getGalleryImageUrl(storagePath) {
+  const cached = imageUrlCache.get(storagePath);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.url;
+  }
+
+  const { data, error } = await retryOnce(() =>
+    withTimeout(
+      sharedState.supabase.storage.from(galleryBucket).createSignedUrl(storagePath, signedUrlTtlSeconds),
+      "Картинка долго не отвечает."
+    )
+  );
+
+  if (error || !data?.signedUrl) throw error || new Error("Нет ссылки на картинку.");
+  imageUrlCache.set(storagePath, {
+    url: data.signedUrl,
+    expiresAt: Date.now() + (signedUrlTtlSeconds - 60) * 1000
+  });
+  return data.signedUrl;
 }
 
-function loadGalleryImage(image, storagePath) {
+async function loadGalleryImage(image, storagePath) {
   image.addEventListener(
     "error",
     () => {
       image.alt = "Картинка пока не открылась";
-      setGalleryStatus("Картинка пока не открылась. Если это старое фото, обновите SQL в Supabase.");
+      setGalleryStatus("Картинка пока не открылась. Обновите страницу или попробуйте ещё раз.");
     },
     { once: true }
   );
-  image.src = getGalleryImageUrl(storagePath);
+
+  try {
+    image.src = await getGalleryImageUrl(storagePath);
+  } catch (error) {
+    image.alt = "Картинка пока не открылась";
+    setGalleryStatus(`Картинка пока не открылась: ${error.message}`);
+  }
 }
 
-function openPhotoViewer(storagePath, caption) {
+async function openPhotoViewer(storagePath, caption) {
   const viewer = document.querySelector("#photo-viewer");
   const image = document.querySelector("#photo-viewer-image");
   const captionEl = document.querySelector("#photo-viewer-caption");
@@ -497,11 +522,16 @@ function openPhotoViewer(storagePath, caption) {
   image.addEventListener(
     "error",
     () => {
-      captionEl.textContent = "Картинка пока не открылась. Если это старое фото, обновите SQL в Supabase.";
+      captionEl.textContent = "Картинка пока не открылась. Обновите страницу или попробуйте ещё раз.";
     },
     { once: true }
   );
-  image.src = getGalleryImageUrl(storagePath);
+
+  try {
+    image.src = await getGalleryImageUrl(storagePath);
+  } catch (error) {
+    captionEl.textContent = `Картинка пока не открылась: ${error.message}`;
+  }
 }
 
 function closePhotoViewer() {
