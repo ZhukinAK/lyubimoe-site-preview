@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Место для двоих</title>
-    <link rel="stylesheet" href="styles.css?v=supabase-shared-v3">
+    <link rel="stylesheet" href="styles.css?v=android-gallery-v1">
   </head>
   <body class="locked">
     <section class="auth-screen" aria-labelledby="auth-title">
@@ -49,16 +49,6 @@
               <div class="hero-actions">
                 <a class="button primary" href="#games">Начать игру</a>
                 <a class="button ghost" href="#gallery">Открыть галерею</a>
-              </div>
-            </div>
-            <div class="status-board" aria-label="Сводка пространства">
-              <div>
-                <span class="metric" id="played-count">0</span>
-                <span>партий сегодня</span>
-              </div>
-              <div>
-                <span class="metric" id="gallery-count">0</span>
-                <span>картинок в галерее</span>
               </div>
             </div>
           </div>
@@ -184,7 +174,7 @@
           <form class="composer" id="memory-form">
             <label>
               <span>Запись</span>
-              <textarea id="memory-text" rows="3" maxlength="220" placeholder="Что добавим сюда?"></textarea>
+              <textarea id="memory-text" rows="3" maxlength="600" placeholder="Что добавим сюда?"></textarea>
             </label>
             <button class="button primary" type="submit">Сохранить</button>
           </form>
@@ -194,9 +184,14 @@
         </section>
       </main>
     </div>
+    <div class="photo-viewer hidden" id="photo-viewer" role="dialog" aria-modal="true" aria-label="Фотография">
+      <button class="photo-viewer-close" type="button" id="photo-viewer-close" aria-label="Закрыть">Закрыть</button>
+      <img id="photo-viewer-image" alt="">
+      <p id="photo-viewer-caption"></p>
+    </div>
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="supabase-config.js?v=supabase-shared-v3"></script>
-    <script src="app.js?v=supabase-shared-v3"></script>
+    <script src="supabase-config.js?v=android-gallery-v1"></script>
+    <script src="app.js?v=android-gallery-v1"></script>
   </body>
 </html>

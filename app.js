@@ -1,17 +1,16 @@
 const storageKeys = {
   auth: "twoplace.auth",
   room: "twoplace.room",
-  gallery: "twoplace.gallery",
-  memories: "twoplace.memories",
   played: "twoplace.played",
   links: "twoplace.links"
 };
 
 const accessHash = "dbe56f2d3bf0ee960d5950fbb280f4f874c0e9a141eaf2db1fcbe399e813daab";
 const galleryBucket = "gallery";
-const signedUrlTtlSeconds = 60 * 60;
-const requestTimeoutMs = 12000;
-const signedUrlCachePrefix = "twoplace.signed-url.";
+const requestTimeoutMs = 45000;
+const imageUrlCache = new Map();
+const imagePlaceholder =
+  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'%3E%3Crect width='1' height='1' fill='%23f8fbff'/%3E%3C/svg%3E";
 
 let sharedState = {
   supabase: null,
@@ -47,28 +46,6 @@ async function retryOnce(task) {
       throw error;
     });
   }
-}
-
-function getCachedSignedUrl(path) {
-  try {
-    const cached = JSON.parse(sessionStorage.getItem(`${signedUrlCachePrefix}${path}`));
-    if (cached?.url && cached.expiresAt > Date.now()) {
-      return cached.url;
-    }
-  } catch {
-    return "";
-  }
-  return "";
-}
-
-function setCachedSignedUrl(path, url) {
-  sessionStorage.setItem(
-    `${signedUrlCachePrefix}${path}`,
-    JSON.stringify({
-      url,
-      expiresAt: Date.now() + (signedUrlTtlSeconds - 120) * 1000
-    })
-  );
 }
 
 const words = [
@@ -214,7 +191,6 @@ function startSharedRoom() {
   initGallery();
   initMemories();
   initRealtime();
-  updateCounters();
 }
 
 function setRoute(route) {
@@ -382,7 +358,7 @@ function fileToGalleryImage(file, onReady, onError) {
   reader.addEventListener("load", () => {
     const image = new Image();
     image.addEventListener("load", () => {
-      const maxSize = 1400;
+      const maxSize = 1000;
       const scale = Math.min(1, maxSize / Math.max(image.width, image.height));
       const width = Math.max(1, Math.round(image.width * scale));
       const height = Math.max(1, Math.round(image.height * scale));
@@ -399,7 +375,7 @@ function fileToGalleryImage(file, onReady, onError) {
           return;
         }
         onReady(blob);
-      }, "image/jpeg", 0.86);
+      }, "image/jpeg", 0.78);
     });
     image.src = reader.result;
   });
@@ -454,27 +430,56 @@ async function getGalleryItems() {
   return data;
 }
 
-async function loadGalleryImage(image, storagePath) {
-  const cachedUrl = getCachedSignedUrl(storagePath);
-  if (cachedUrl) {
-    image.src = cachedUrl;
-    return;
+async function getGalleryImageUrl(storagePath) {
+  if (imageUrlCache.has(storagePath)) {
+    return imageUrlCache.get(storagePath);
   }
 
-  try {
-    const { data, error } = await retryOnce(() =>
-      withTimeout(
-        sharedState.supabase.storage.from(galleryBucket).createSignedUrl(storagePath, signedUrlTtlSeconds),
-        "Картинка долго не отвечает."
-      )
-    );
+  const { data, error } = await retryOnce(() =>
+    withTimeout(
+      sharedState.supabase.storage.from(galleryBucket).download(storagePath),
+      "Картинка долго не отвечает."
+    )
+  );
 
-    if (error || !data?.signedUrl) throw error || new Error("Нет ссылки на картинку.");
-    setCachedSignedUrl(storagePath, data.signedUrl);
-    image.src = data.signedUrl;
+  if (error || !data) throw error || new Error("Нет картинки.");
+  const objectUrl = URL.createObjectURL(data);
+  imageUrlCache.set(storagePath, objectUrl);
+  return objectUrl;
+}
+
+async function loadGalleryImage(image, storagePath) {
+  try {
+    image.src = await getGalleryImageUrl(storagePath);
   } catch {
     image.alt = "Картинка пока не загрузилась";
   }
+}
+
+async function openPhotoViewer(storagePath, caption) {
+  const viewer = document.querySelector("#photo-viewer");
+  const image = document.querySelector("#photo-viewer-image");
+  const captionEl = document.querySelector("#photo-viewer-caption");
+  if (!viewer || !image || !captionEl) return;
+
+  captionEl.textContent = caption || "";
+  image.removeAttribute("src");
+  viewer.classList.remove("hidden");
+
+  try {
+    image.src = await getGalleryImageUrl(storagePath);
+  } catch {
+    captionEl.textContent = "Картинка пока не загрузилась.";
+  }
+}
+
+function closePhotoViewer() {
+  const viewer = document.querySelector("#photo-viewer");
+  const image = document.querySelector("#photo-viewer-image");
+  const caption = document.querySelector("#photo-viewer-caption");
+  viewer?.classList.add("hidden");
+  image?.removeAttribute("src");
+  if (caption) caption.textContent = "";
 }
 
 async function renderGallery() {
@@ -483,7 +488,6 @@ async function renderGallery() {
 
   if (!sharedState.supabase || !sharedState.roomId) {
     renderGalleryEmpty(grid);
-    updateGalleryCounter(0);
     return;
   }
 
@@ -493,14 +497,12 @@ async function renderGallery() {
     items = await getGalleryItems();
   } catch {
     renderGalleryEmpty(grid);
-    updateGalleryCounter(0);
     setSyncStatus("Не получилось прочитать общую галерею.");
     return;
   }
 
   if (!items.length) {
     renderGalleryEmpty(grid);
-    updateGalleryCounter(0);
     return;
   }
 
@@ -510,8 +512,10 @@ async function renderGallery() {
 
     const image = document.createElement("img");
     image.alt = item.caption || "Изображение из галереи";
+    image.src = imagePlaceholder;
     image.loading = "lazy";
     image.decoding = "async";
+    image.addEventListener("click", () => openPhotoViewer(item.storage_path, item.caption));
     card.append(image);
     loadGalleryImage(image, item.storage_path);
 
@@ -535,7 +539,6 @@ async function renderGallery() {
     grid.append(card);
   });
 
-  updateGalleryCounter(items.length);
   setSyncStatus("Общая комната подключена.");
 }
 
@@ -726,6 +729,11 @@ function initMemories() {
         input.value = "";
         setSyncStatus("Запись сохранена в общей комнате.");
         await renderMemories();
+      })
+      .catch((error) => {
+        submitButton.disabled = false;
+        setSyncStatus(`Не получилось сохранить запись: ${error.message}`);
+        alert("Не получилось сохранить запись.");
       });
   });
   renderMemories();
@@ -829,16 +837,26 @@ function initLinks() {
   renderLinks();
 }
 
-function updateGalleryCounter(count) {
-  document.querySelector("#gallery-count").textContent = String(count);
+function updateCounters() {
 }
 
-function updateCounters() {
-  document.querySelector("#played-count").textContent = localStorage.getItem(storageKeys.played) || "0";
+function initPhotoViewer() {
+  document.querySelector("#photo-viewer-close")?.addEventListener("click", closePhotoViewer);
+  document.querySelector("#photo-viewer")?.addEventListener("click", (event) => {
+    if (event.target.id === "photo-viewer") {
+      closePhotoViewer();
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      closePhotoViewer();
+    }
+  });
 }
 
 initAccessGate();
 initRouter();
 initGames();
 initLinks();
+initPhotoViewer();
 updateCounters();
