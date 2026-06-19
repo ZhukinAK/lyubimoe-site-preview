@@ -7,7 +7,7 @@ const storageKeys = {
 
 const accessHash = "dbe56f2d3bf0ee960d5950fbb280f4f874c0e9a141eaf2db1fcbe399e813daab";
 const galleryBucket = "gallery";
-const requestTimeoutMs = 45000;
+const requestTimeoutMs = 180000;
 const imagePlaceholder =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'%3E%3Crect width='1' height='1' fill='%23f8fbff'/%3E%3C/svg%3E";
 
@@ -801,11 +801,16 @@ function initMemories() {
     renderPendingMemories();
     setSyncStatus("Сохраняем запись...");
 
-    withTimeout(
-      sharedState.supabase.from("memories").insert({ room_id: sharedState.roomId, text }),
-      "Сохранение долго не отвечает."
-    )
+    const slowSaveTimer = setTimeout(() => {
+      submitButton.disabled = false;
+      setSyncStatus("Связь медленная, но запись ещё сохраняется.");
+    }, 10000);
+
+    sharedState.supabase
+      .from("memories")
+      .insert({ room_id: sharedState.roomId, text })
       .then(async ({ error }) => {
+        clearTimeout(slowSaveTimer);
         submitButton.disabled = false;
         if (error) {
           setSyncStatus(`Не получилось сохранить запись: ${error.message}`);
@@ -820,6 +825,7 @@ function initMemories() {
         await renderMemories();
       })
       .catch((error) => {
+        clearTimeout(slowSaveTimer);
         submitButton.disabled = false;
         setSyncStatus(`Не получилось сохранить запись: ${error.message}`);
         sharedState.pendingMemories = sharedState.pendingMemories.filter((item) => item.id !== pendingMemory.id);
