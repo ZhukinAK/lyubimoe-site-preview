@@ -1,9 +1,12 @@
 const storageKeys = {
+  auth: "twoplace.auth",
   gallery: "twoplace.gallery",
   memories: "twoplace.memories",
   played: "twoplace.played",
   links: "twoplace.links"
 };
+
+const accessHash = "256bf3ec846e4b0022f5a112fcb5f0d8d63de49ad3347411705539dff8421782";
 
 const words = [
   { word: "объятие", hint: "То, чего особенно не хватает на расстоянии" },
@@ -40,6 +43,44 @@ function writeJson(key, value) {
 
 function createId() {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+async function hashText(text) {
+  const bytes = new TextEncoder().encode(text);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function unlockRoom() {
+  document.body.classList.remove("locked");
+  document.body.classList.add("unlocked");
+}
+
+function initAccessGate() {
+  const form = document.querySelector("#auth-form");
+  const input = document.querySelector("#auth-passphrase");
+  const error = document.querySelector("#auth-error");
+
+  if (localStorage.getItem(storageKeys.auth) === accessHash) {
+    unlockRoom();
+    return;
+  }
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    error.textContent = "";
+
+    const hash = await hashText(input.value.trim());
+    if (hash === accessHash) {
+      localStorage.setItem(storageKeys.auth, accessHash);
+      input.value = "";
+      unlockRoom();
+      return;
+    }
+
+    error.textContent = "Не та фраза.";
+    input.select();
+  });
 }
 
 function setRoute(route) {
@@ -439,6 +480,7 @@ function updateCounters() {
   document.querySelector("#played-count").textContent = localStorage.getItem(storageKeys.played) || "0";
 }
 
+initAccessGate();
 initRouter();
 initGames();
 initGallery();

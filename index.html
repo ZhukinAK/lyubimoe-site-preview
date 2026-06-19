@@ -6,7 +6,20 @@
     <title>Место для двоих</title>
     <link rel="stylesheet" href="styles.css">
   </head>
-  <body>
+  <body class="locked">
+    <section class="auth-screen" aria-labelledby="auth-title">
+      <form class="auth-card" id="auth-form">
+        <p class="eyebrow">Тихий вход</p>
+        <h1 id="auth-title">Наша уютная комната</h1>
+        <p class="lead">Только для нас.</p>
+        <label>
+          <span>Фраза</span>
+          <input type="password" id="auth-passphrase" autocomplete="current-password" required>
+        </label>
+        <button class="button primary" type="submit">Войти</button>
+        <p class="auth-error" id="auth-error" aria-live="polite"></p>
+      </form>
+    </section>
     <div class="app-shell">
       <header class="topbar">
         <a class="brand" href="#home" aria-label="На главную">
