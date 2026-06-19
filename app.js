@@ -10,6 +10,8 @@ const storageKeys = {
 const accessHash = "dbe56f2d3bf0ee960d5950fbb280f4f874c0e9a141eaf2db1fcbe399e813daab";
 const galleryBucket = "gallery";
 const signedUrlTtlSeconds = 60 * 60;
+const requestTimeoutMs = 12000;
+const signedUrlCachePrefix = "twoplace.signed-url.";
 
 let sharedState = {
   supabase: null,
@@ -25,6 +27,48 @@ function setSyncStatus(message) {
   if (status) {
     status.textContent = message;
   }
+}
+
+function withTimeout(promise, message = "Запрос занял слишком много времени.") {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(message)), requestTimeoutMs);
+  });
+
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
+}
+
+async function retryOnce(task) {
+  try {
+    return await task();
+  } catch (error) {
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    return task().catch(() => {
+      throw error;
+    });
+  }
+}
+
+function getCachedSignedUrl(path) {
+  try {
+    const cached = JSON.parse(sessionStorage.getItem(`${signedUrlCachePrefix}${path}`));
+    if (cached?.url && cached.expiresAt > Date.now()) {
+      return cached.url;
+    }
+  } catch {
+    return "";
+  }
+  return "";
+}
+
+function setCachedSignedUrl(path, url) {
+  sessionStorage.setItem(
+    `${signedUrlCachePrefix}${path}`,
+    JSON.stringify({
+      url,
+      expiresAt: Date.now() + (signedUrlTtlSeconds - 120) * 1000
+    })
+  );
 }
 
 const words = [
@@ -394,27 +438,43 @@ function renderGalleryEmpty(grid) {
 }
 
 async function getGalleryItems() {
-  const { data, error } = await sharedState.supabase
-    .from("gallery_items")
-    .select("id, caption, storage_path, created_at")
-    .eq("room_id", sharedState.roomId)
-    .is("deleted_at", null)
-    .order("created_at", { ascending: false });
+  const { data, error } = await retryOnce(() =>
+    withTimeout(
+      sharedState.supabase
+        .from("gallery_items")
+        .select("id, caption, storage_path, created_at")
+        .eq("room_id", sharedState.roomId)
+        .is("deleted_at", null)
+        .order("created_at", { ascending: false }),
+      "Галерея долго не отвечает."
+    )
+  );
 
   if (error) throw error;
+  return data;
+}
 
-  return Promise.all(
-    data.map(async (item) => {
-      const { data: signedData, error: signedError } = await sharedState.supabase.storage
-        .from(galleryBucket)
-        .createSignedUrl(item.storage_path, signedUrlTtlSeconds);
+async function loadGalleryImage(image, storagePath) {
+  const cachedUrl = getCachedSignedUrl(storagePath);
+  if (cachedUrl) {
+    image.src = cachedUrl;
+    return;
+  }
 
-      return {
-        ...item,
-        src: signedError ? "" : signedData.signedUrl
-      };
-    })
-  );
+  try {
+    const { data, error } = await retryOnce(() =>
+      withTimeout(
+        sharedState.supabase.storage.from(galleryBucket).createSignedUrl(storagePath, signedUrlTtlSeconds),
+        "Картинка долго не отвечает."
+      )
+    );
+
+    if (error || !data?.signedUrl) throw error || new Error("Нет ссылки на картинку.");
+    setCachedSignedUrl(storagePath, data.signedUrl);
+    image.src = data.signedUrl;
+  } catch {
+    image.alt = "Картинка пока не загрузилась";
+  }
 }
 
 async function renderGallery() {
@@ -429,6 +489,7 @@ async function renderGallery() {
 
   let items = [];
   try {
+    setSyncStatus("Загружаем общую комнату...");
     items = await getGalleryItems();
   } catch {
     renderGalleryEmpty(grid);
@@ -447,17 +508,12 @@ async function renderGallery() {
     const card = document.createElement("article");
     card.className = "gallery-card";
 
-    if (item.src) {
-      const image = document.createElement("img");
-      image.src = item.src;
-      image.alt = item.caption || "Изображение из галереи";
-      card.append(image);
-    } else {
-      const placeholder = document.createElement("div");
-      placeholder.className = "placeholder-art";
-      placeholder.textContent = "Галерея";
-      card.append(placeholder);
-    }
+    const image = document.createElement("img");
+    image.alt = item.caption || "Изображение из галереи";
+    image.loading = "lazy";
+    image.decoding = "async";
+    card.append(image);
+    loadGalleryImage(image, item.storage_path);
 
     const body = document.createElement("div");
     body.className = "gallery-card-body";
@@ -480,6 +536,7 @@ async function renderGallery() {
   });
 
   updateGalleryCounter(items.length);
+  setSyncStatus("Общая комната подключена.");
 }
 
 function initGallery() {
@@ -501,33 +558,40 @@ function initGallery() {
     const saveItem = async (blob) => {
       const id = createId();
       const storagePath = `${sharedState.roomId}/${id}.jpg`;
-      const { error: uploadError } = await sharedState.supabase.storage
-        .from(galleryBucket)
-        .upload(storagePath, blob, {
-          contentType: "image/jpeg",
-          upsert: false
-        });
+      try {
+        setSyncStatus("Загружаем картинку...");
+        const { error: uploadError } = await withTimeout(
+          sharedState.supabase.storage.from(galleryBucket).upload(storagePath, blob, {
+            contentType: "image/jpeg",
+            upsert: false
+          }),
+          "Загрузка картинки долго не отвечает."
+        );
 
-      if (uploadError) {
+        if (uploadError) throw uploadError;
+
+        const { error: insertError } = await withTimeout(
+          sharedState.supabase.from("gallery_items").insert({
+            room_id: sharedState.roomId,
+            caption,
+            storage_path: storagePath
+          }),
+          "Сохранение карточки долго не отвечает."
+        );
+
+        if (insertError) throw insertError;
+
+        event.target.reset();
+        setSyncStatus("Картинка сохранена в общей комнате.");
+        await renderGallery();
+      } catch (error) {
         submitButton.disabled = false;
+        setSyncStatus(`Не получилось добавить карточку: ${error.message}`);
         alert("Не получилось загрузить картинку.");
         return;
       }
 
-      const { error: insertError } = await sharedState.supabase.from("gallery_items").insert({
-        room_id: sharedState.roomId,
-        caption,
-        storage_path: storagePath
-      });
-
       submitButton.disabled = false;
-      if (insertError) {
-        alert("Не получилось добавить карточку.");
-        return;
-      }
-
-      event.target.reset();
-      await renderGallery();
     };
 
     fileToGalleryImage(file, saveItem, () => {
@@ -567,12 +631,17 @@ function renderMemoriesEmpty(timeline) {
 }
 
 async function getMemories() {
-  const { data, error } = await sharedState.supabase
-    .from("memories")
-    .select("id, text, created_at")
-    .eq("room_id", sharedState.roomId)
-    .is("deleted_at", null)
-    .order("created_at", { ascending: false });
+  const { data, error } = await retryOnce(() =>
+    withTimeout(
+      sharedState.supabase
+        .from("memories")
+        .select("id, text, created_at")
+        .eq("room_id", sharedState.roomId)
+        .is("deleted_at", null)
+        .order("created_at", { ascending: false }),
+      "Лента долго не отвечает."
+    )
+  );
 
   if (error) throw error;
   return data;
@@ -643,9 +712,10 @@ function initMemories() {
     const submitButton = event.target.querySelector("button");
     submitButton.disabled = true;
 
-    sharedState.supabase
-      .from("memories")
-      .insert({ room_id: sharedState.roomId, text })
+    withTimeout(
+      sharedState.supabase.from("memories").insert({ room_id: sharedState.roomId, text }),
+      "Сохранение долго не отвечает."
+    )
       .then(async ({ error }) => {
         submitButton.disabled = false;
         if (error) {
