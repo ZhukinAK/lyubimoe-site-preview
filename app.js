@@ -7,7 +7,7 @@ const storageKeys = {
 
 const accessHash = "dbe56f2d3bf0ee960d5950fbb280f4f874c0e9a141eaf2db1fcbe399e813daab";
 const galleryBucket = "gallery";
-const appVersion = "phone-debug-1";
+const appVersion = "phone-debug-2";
 const requestTimeoutMs = 180000;
 const signedUrlTtlSeconds = 3600;
 const imagePlaceholder =
@@ -118,6 +118,37 @@ async function debugStep(label, task) {
   }
 }
 
+async function getAuthToken() {
+  const { data } = await sharedState.supabase.auth.getSession();
+  return data?.session?.access_token || "";
+}
+
+async function rawRestDebug(path) {
+  const config = getSupabaseConfig();
+  const token = await getAuthToken();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+  try {
+    const response = await fetch(`${config.url.replace(/\/+$/, "")}/rest/v1/${path}`, {
+      method: "GET",
+      headers: {
+        apikey: config.anonKey,
+        Authorization: `Bearer ${token}`,
+        Accept: "application/json"
+      },
+      signal: controller.signal
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`${response.status} ${text.slice(0, 120)}`);
+    }
+    return JSON.parse(text || "[]");
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 function testImageUrl(url) {
   return new Promise((resolve, reject) => {
     const image = new Image();
@@ -159,6 +190,13 @@ async function runPhoneDiagnostics() {
     return `${data.length} записей`;
   });
 
+  await debugStep("raw fetch memories", async () => {
+    const data = await rawRestDebug(
+      `memories?select=id,text,created_at&room_id=eq.${sharedState.roomId}&deleted_at=is.null&order=created_at.desc&limit=3`
+    );
+    return `${data.length} записей`;
+  });
+
   const galleryItems = await debugStep("gallery select", async () => {
     const { data, error } = await withTimeout(
       sharedState.supabase
@@ -174,7 +212,15 @@ async function runPhoneDiagnostics() {
     return data;
   });
 
-  const firstItem = Array.isArray(galleryItems) ? galleryItems[0] : null;
+  const rawGalleryItems = await debugStep("raw fetch gallery", async () => {
+    const data = await rawRestDebug(
+      `gallery_items?select=id,caption,storage_path&room_id=eq.${sharedState.roomId}&deleted_at=is.null&limit=1`
+    );
+    return data;
+  });
+
+  const firstItem = (Array.isArray(galleryItems) ? galleryItems[0] : null) ||
+    (Array.isArray(rawGalleryItems) ? rawGalleryItems[0] : null);
   if (!firstItem) {
     debugLog("storage tests: нет фото для проверки");
     return;
