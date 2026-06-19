@@ -38,6 +38,10 @@ function writeJson(key, value) {
   localStorage.setItem(key, JSON.stringify(value));
 }
 
+function createId() {
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 function setRoute(route) {
   const nextRoute = route || "home";
   document.querySelectorAll("[data-view]").forEach((view) => {
@@ -198,6 +202,37 @@ function initGames() {
   pickWord();
 }
 
+function fileToGalleryImage(file, onReady) {
+  const reader = new FileReader();
+  reader.addEventListener("load", () => {
+    const image = new Image();
+    image.addEventListener("load", () => {
+      const maxSize = 1400;
+      const scale = Math.min(1, maxSize / Math.max(image.width, image.height));
+      const width = Math.max(1, Math.round(image.width * scale));
+      const height = Math.max(1, Math.round(image.height * scale));
+      const canvas = document.createElement("canvas");
+      const context = canvas.getContext("2d");
+
+      canvas.width = width;
+      canvas.height = height;
+      context.drawImage(image, 0, 0, width, height);
+      onReady(canvas.toDataURL("image/jpeg", 0.86));
+    });
+    image.src = reader.result;
+  });
+  reader.readAsDataURL(file);
+}
+
+function deleteGalleryItem(id) {
+  const gallery = readJson(storageKeys.gallery, []);
+  writeJson(
+    storageKeys.gallery,
+    gallery.filter((item, index) => (item.id || String(index)) !== id)
+  );
+  renderGallery();
+}
+
 function renderGallery() {
   const gallery = readJson(storageKeys.gallery, []);
   const grid = document.querySelector("#gallery-grid");
@@ -212,7 +247,8 @@ function renderGallery() {
         }
       ];
 
-  items.forEach((item) => {
+  items.forEach((item, index) => {
+    const itemId = item.id || String(index);
     const card = document.createElement("article");
     card.className = "gallery-card";
 
@@ -229,9 +265,26 @@ function renderGallery() {
     }
 
     const body = document.createElement("div");
+    body.className = "gallery-card-body";
     const caption = document.createElement("p");
     caption.textContent = item.caption || "Без подписи";
-    body.append(caption);
+
+    if (gallery.length) {
+      const deleteButton = document.createElement("button");
+      deleteButton.className = "gallery-delete";
+      deleteButton.type = "button";
+      deleteButton.textContent = "Удалить";
+      deleteButton.setAttribute("aria-label", `Удалить из галереи: ${item.caption || "изображение"}`);
+      deleteButton.addEventListener("click", () => {
+        if (confirm("Удалить эту карточку из галереи?")) {
+          deleteGalleryItem(itemId);
+        }
+      });
+      body.append(caption, deleteButton);
+    } else {
+      body.append(caption);
+    }
+
     card.append(body);
     grid.append(card);
   });
@@ -248,7 +301,7 @@ function initGallery() {
 
     const saveItem = (src) => {
       const gallery = readJson(storageKeys.gallery, []);
-      gallery.unshift({ src, caption, createdAt: new Date().toISOString() });
+      gallery.unshift({ id: createId(), src, caption, createdAt: new Date().toISOString() });
       writeJson(storageKeys.gallery, gallery.slice(0, 18));
       event.target.reset();
       renderGallery();
@@ -259,9 +312,7 @@ function initGallery() {
       return;
     }
 
-    const reader = new FileReader();
-    reader.addEventListener("load", () => saveItem(reader.result));
-    reader.readAsDataURL(file);
+    fileToGalleryImage(file, saveItem);
   });
   renderGallery();
 }
