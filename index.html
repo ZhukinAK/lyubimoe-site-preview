@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Место для двоих</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="#home" aria-label="На главную">
+          <span class="brand-mark">2</span>
+          <span>
+            <strong>Место для двоих</strong>
+            <small>игры, фото и маленькие радости</small>
+          </span>
+        </a>
+        <nav class="nav" aria-label="Основные разделы" tabindex="0">
+          <a href="#home" data-route="home">Главная</a>
+          <a href="#games" data-route="games">Игры</a>
+          <a href="#gallery" data-route="gallery">Галерея</a>
+          <a href="#memories" data-route="memories">Воспоминания</a>
+        </nav>
+      </header>
+
+      <main>
+        <section class="view active" id="home" data-view>
+          <div class="hero">
+            <div class="hero-copy">
+              <p class="eyebrow">Приватное пространство</p>
+              <h1>Ваш маленький сайт для вечеров на расстоянии</h1>
+              <p class="lead">
+                Тут можно играть, собирать фотографии и хранить внутренние шутки.
+                Прототип пока простой, но уже показывает будущую форму проекта.
+              </p>
+              <div class="hero-actions">
+                <a class="button primary" href="#games">Начать игру</a>
+                <a class="button ghost" href="#gallery">Открыть галерею</a>
+              </div>
+            </div>
+            <div class="status-board" aria-label="Сводка пространства">
+              <div>
+                <span class="metric">2</span>
+                <span>участника</span>
+              </div>
+              <div>
+                <span class="metric" id="played-count">0</span>
+                <span>партий сегодня</span>
+              </div>
+              <div>
+                <span class="metric" id="gallery-count">0</span>
+                <span>картинок в галерее</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="section-heading">
+            <h2>Что уже можно попробовать</h2>
+            <p>Это кликабельный прототип: разделы переключаются, Виселица работает, заметки и картинки сохраняются в браузере.</p>
+          </div>
+
+          <div class="feature-grid">
+            <article class="feature">
+              <span class="feature-icon">Игры</span>
+              <h3>Лобби для двоих</h3>
+              <p>Заготовка списка игр и первая интерактивная Виселица.</p>
+            </article>
+            <article class="feature">
+              <span class="feature-icon">Фото</span>
+              <h3>Общая галерея</h3>
+              <p>Можно добавить картинку, подпись и сразу увидеть её в ленте.</p>
+            </article>
+            <article class="feature">
+              <span class="feature-icon">Память</span>
+              <h3>Воспоминания</h3>
+              <p>Небольшие записи, идеи для созвонов и будущие внутренние традиции.</p>
+            </article>
+          </div>
+
+          <div class="section-heading">
+            <p class="eyebrow">Быстрый доступ</p>
+            <h2>Полезные ссылки</h2>
+            <p>Место для ссылок, которыми вы часто пользуетесь вместе: созвоны, просмотры, спорт, плейлисты и любые общие привычки.</p>
+          </div>
+
+          <form class="composer links-composer" id="link-form">
+            <label>
+              <span>Название</span>
+              <input type="text" id="link-title" maxlength="48" placeholder="Например: MTS Link">
+            </label>
+            <label>
+              <span>Ссылка</span>
+              <input type="url" id="link-url" maxlength="240" placeholder="https://...">
+            </label>
+            <button class="button primary" type="submit">Добавить</button>
+          </form>
+
+          <div class="links-grid" id="links-grid"></div>
+        </section>
+
+        <section class="view" id="games" data-view>
+          <div class="section-heading">
+            <p class="eyebrow">Игровая комната</p>
+            <h2>Выберите, во что сыграть</h2>
+            <p>Первая игра уже работает локально. Остальные показаны как ближайшие модули.</p>
+          </div>
+
+          <div class="games-layout">
+            <aside class="game-list" aria-label="Список игр">
+              <button class="game-tile active" type="button" data-game="hangman">
+                <strong>Виселица</strong>
+                <span>готово для прототипа</span>
+              </button>
+              <button class="game-tile" type="button" data-game="balda">
+                <strong>Балда</strong>
+                <span>следующий модуль</span>
+              </button>
+              <button class="game-tile" type="button" data-game="questions">
+                <strong>Вопросы друг другу</strong>
+                <span>уютный режим</span>
+              </button>
+            </aside>
+
+            <div class="game-panel" id="hangman-panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Виселица</p>
+                  <h3>Угадайте слово</h3>
+                </div>
+                <button class="button small" type="button" id="new-word">Новое слово</button>
+              </div>
+              <form class="hangman-setup" id="hangman-setup">
+                <label>
+                  <span>Кто загадывает</span>
+                  <select id="hangman-author">
+                    <option value="Ты">Ты для Даши</option>
+                    <option value="Даша">Даша для тебя</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Слово</span>
+                  <input type="text" id="custom-word" maxlength="24" placeholder="Например: встреча">
+                </label>
+                <label>
+                  <span>Подсказка</span>
+                  <input type="text" id="custom-hint" maxlength="90" placeholder="Намёк для второго игрока">
+                </label>
+                <button class="button primary" type="submit">Загадать</button>
+              </form>
+              <p class="round-owner" id="round-owner">Сейчас слово выбрано из демо-базы.</p>
+              <div class="hangman-word" id="hangman-word" aria-label="Загаданное слово"></div>
+              <p class="hint" id="hangman-hint"></p>
+              <div class="hangman-status">
+                <span id="mistakes">Ошибки: 0 / 6</span>
+                <span id="used-letters">Буквы: нет</span>
+              </div>
+              <div class="letters" id="letters" aria-label="Клавиатура букв"></div>
+              <p class="result" id="game-result" aria-live="polite"></p>
+            </div>
+
+            <div class="game-panel hidden" id="coming-soon-panel">
+              <p class="eyebrow">Скоро</p>
+              <h3 id="coming-title">Новая игра</h3>
+              <p id="coming-text">Этот модуль появится после того, как закрепим общий каркас.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" id="gallery" data-view>
+          <div class="section-heading">
+            <p class="eyebrow">Галерея</p>
+            <h2>Картинки, фото и ваши приколы</h2>
+            <p>В прототипе всё хранится в браузере. В настоящей версии это переедет в Supabase Storage.</p>
+          </div>
+
+          <form class="composer" id="gallery-form">
+            <label>
+              <span>Картинка</span>
+              <input type="file" id="gallery-file" accept="image/*">
+            </label>
+            <label>
+              <span>Подпись</span>
+              <input type="text" id="gallery-caption" maxlength="80" placeholder="Например: тот самый мем">
+            </label>
+            <button class="button primary" type="submit">Добавить</button>
+          </form>
+
+          <div class="gallery-grid" id="gallery-grid"></div>
+        </section>
+
+        <section class="view" id="memories" data-view>
+          <div class="section-heading">
+            <p class="eyebrow">Воспоминания</p>
+            <h2>Маленькая общая лента</h2>
+            <p>Можно оставить заметку, идею для вечера или фразу, которую не хочется потерять.</p>
+          </div>
+
+          <form class="composer" id="memory-form">
+            <label>
+              <span>Запись</span>
+              <textarea id="memory-text" rows="3" maxlength="220" placeholder="Что добавим в ваше место?"></textarea>
+            </label>
+            <button class="button primary" type="submit">Сохранить</button>
+          </form>
+
+          <div class="timeline" id="timeline"></div>
+        </section>
+      </main>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
