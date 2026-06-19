@@ -16,12 +16,16 @@ SQL создаёт:
 
 - комнату `preview` с фразой `антон и катя`;
 - таблицы галереи, воспоминаний и будущих игровых сессий;
-- приватный Storage bucket `gallery`;
+- Storage bucket `gallery` с публичными файлами по прямой ссылке;
 - RLS policies;
 - RPC `join_room`;
 - Realtime publication для `gallery_items` и `memories`.
 
-## 3. Заполнить конфиг
+## 3. Если SQL уже выполнялся раньше
+
+Если `supabase-setup.sql` уже выполнялся, запустите его ещё раз. Он обновит bucket `gallery` в public-режим, не удаляя данные.
+
+## 4. Заполнить конфиг
 
 В `supabase-config.js` вставьте публичные значения проекта:
 

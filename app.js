@@ -8,7 +8,6 @@ const storageKeys = {
 const accessHash = "dbe56f2d3bf0ee960d5950fbb280f4f874c0e9a141eaf2db1fcbe399e813daab";
 const galleryBucket = "gallery";
 const requestTimeoutMs = 45000;
-const imageUrlCache = new Map();
 const imagePlaceholder =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'%3E%3Crect width='1' height='1' fill='%23f8fbff'/%3E%3C/svg%3E";
 
@@ -18,6 +17,8 @@ let sharedState = {
   initialized: false,
   galleryReady: false,
   memoriesReady: false,
+  pendingMemories: [],
+  memoriesCache: [],
   realtimeChannel: null
 };
 
@@ -54,15 +55,6 @@ async function retryOnce(task) {
       throw error;
     });
   }
-}
-
-function blobToDataUrl(blob) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.addEventListener("load", () => resolve(reader.result));
-    reader.addEventListener("error", () => reject(new Error("Не получилось прочитать картинку.")));
-    reader.readAsDataURL(blob);
-  });
 }
 
 const words = [
@@ -477,34 +469,23 @@ async function getGalleryItems() {
   return data;
 }
 
-async function getGalleryImageUrl(storagePath) {
-  if (imageUrlCache.has(storagePath)) {
-    return imageUrlCache.get(storagePath);
-  }
+function getGalleryImageUrl(storagePath) {
+  return sharedState.supabase.storage.from(galleryBucket).getPublicUrl(storagePath).data.publicUrl;
+}
 
-  const { data, error } = await retryOnce(() =>
-    withTimeout(
-      sharedState.supabase.storage.from(galleryBucket).download(storagePath),
-      "Картинка долго не отвечает."
-    )
+function loadGalleryImage(image, storagePath) {
+  image.addEventListener(
+    "error",
+    () => {
+      image.alt = "Картинка пока не открылась";
+      setGalleryStatus("Картинка пока не открылась. Если это старое фото, обновите SQL в Supabase.");
+    },
+    { once: true }
   );
-
-  if (error || !data) throw error || new Error("Нет картинки.");
-  const dataUrl = await blobToDataUrl(data);
-  imageUrlCache.set(storagePath, dataUrl);
-  return dataUrl;
+  image.src = getGalleryImageUrl(storagePath);
 }
 
-async function loadGalleryImage(image, storagePath) {
-  try {
-    image.src = await getGalleryImageUrl(storagePath);
-  } catch (error) {
-    image.alt = "Картинка пока не загрузилась";
-    setGalleryStatus(`Картинка пока не загрузилась: ${error.message}`);
-  }
-}
-
-async function openPhotoViewer(storagePath, caption) {
+function openPhotoViewer(storagePath, caption) {
   const viewer = document.querySelector("#photo-viewer");
   const image = document.querySelector("#photo-viewer-image");
   const captionEl = document.querySelector("#photo-viewer-caption");
@@ -513,12 +494,14 @@ async function openPhotoViewer(storagePath, caption) {
   captionEl.textContent = caption || "";
   image.removeAttribute("src");
   viewer.classList.remove("hidden");
-
-  try {
-    image.src = await getGalleryImageUrl(storagePath);
-  } catch {
-    captionEl.textContent = "Картинка пока не загрузилась.";
-  }
+  image.addEventListener(
+    "error",
+    () => {
+      captionEl.textContent = "Картинка пока не открылась. Если это старое фото, обновите SQL в Supabase.";
+    },
+    { once: true }
+  );
+  image.src = getGalleryImageUrl(storagePath);
 }
 
 function closePhotoViewer() {
@@ -692,6 +675,55 @@ function renderMemoriesEmpty(timeline) {
   timeline.append(card);
 }
 
+function appendMemoryCard(timeline, item) {
+  const card = document.createElement("article");
+  card.className = "memory-card";
+  if (item.pending) {
+    card.classList.add("pending");
+  }
+  const time = document.createElement("time");
+  time.dateTime = item.created_at;
+  time.textContent = new Date(item.created_at).toLocaleDateString("ru-RU", {
+    day: "numeric",
+    month: "long"
+  });
+  const text = document.createElement("p");
+  text.textContent = item.text;
+  card.append(time, text);
+
+  if (item.pending) {
+    const pendingNote = document.createElement("span");
+    pendingNote.className = "memory-pending";
+    pendingNote.textContent = "Сохраняется...";
+    card.append(pendingNote);
+  } else {
+    const deleteButton = document.createElement("button");
+    deleteButton.className = "memory-delete";
+    deleteButton.type = "button";
+    deleteButton.textContent = "Удалить";
+    deleteButton.setAttribute("aria-label", "Удалить запись из воспоминаний");
+    deleteButton.addEventListener("click", () => {
+      if (confirm("Удалить эту запись?")) {
+        deleteMemoryItem(item.id);
+      }
+    });
+    card.append(deleteButton);
+  }
+
+  timeline.append(card);
+}
+
+function renderPendingMemories() {
+  const timeline = document.querySelector("#timeline");
+  timeline.innerHTML = "";
+  const items = [...sharedState.pendingMemories, ...sharedState.memoriesCache];
+  if (!items.length) {
+    renderMemoriesEmpty(timeline);
+    return;
+  }
+  items.forEach((item) => appendMemoryCard(timeline, item));
+}
+
 async function getMemories() {
   const { data, error } = await retryOnce(() =>
     withTimeout(
@@ -721,41 +753,25 @@ async function renderMemories() {
   let memories = [];
   try {
     memories = await getMemories();
+    sharedState.memoriesCache = memories;
   } catch {
-    renderMemoriesEmpty(timeline);
+    if (sharedState.pendingMemories.length) {
+      renderPendingMemories();
+    } else {
+      renderMemoriesEmpty(timeline);
+    }
     setSyncStatus("Не получилось прочитать общую ленту.");
     return;
   }
+
+  memories = [...sharedState.pendingMemories, ...memories];
 
   if (!memories.length) {
     renderMemoriesEmpty(timeline);
     return;
   }
 
-  memories.forEach((item) => {
-    const card = document.createElement("article");
-    card.className = "memory-card";
-    const time = document.createElement("time");
-    time.dateTime = item.created_at;
-    time.textContent = new Date(item.created_at).toLocaleDateString("ru-RU", {
-      day: "numeric",
-      month: "long"
-    });
-    const text = document.createElement("p");
-    text.textContent = item.text;
-    const deleteButton = document.createElement("button");
-    deleteButton.className = "memory-delete";
-    deleteButton.type = "button";
-    deleteButton.textContent = "Удалить";
-    deleteButton.setAttribute("aria-label", "Удалить запись из воспоминаний");
-    deleteButton.addEventListener("click", () => {
-      if (confirm("Удалить эту запись?")) {
-        deleteMemoryItem(item.id);
-      }
-    });
-    card.append(time, text, deleteButton);
-    timeline.append(card);
-  });
+  memories.forEach((item) => appendMemoryCard(timeline, item));
 }
 
 function initMemories() {
@@ -772,7 +788,17 @@ function initMemories() {
     if (!text || !sharedState.supabase || !sharedState.roomId) return;
 
     const submitButton = event.target.querySelector("button");
+    const pendingMemory = {
+      id: `pending-${createId()}`,
+      text,
+      created_at: new Date().toISOString(),
+      pending: true
+    };
+
     submitButton.disabled = true;
+    input.value = "";
+    sharedState.pendingMemories.unshift(pendingMemory);
+    renderPendingMemories();
     setSyncStatus("Сохраняем запись...");
 
     withTimeout(
@@ -783,16 +809,22 @@ function initMemories() {
         submitButton.disabled = false;
         if (error) {
           setSyncStatus(`Не получилось сохранить запись: ${error.message}`);
+          sharedState.pendingMemories = sharedState.pendingMemories.filter((item) => item.id !== pendingMemory.id);
+          input.value = text;
+          renderMemories();
           alert("Не получилось сохранить запись.");
           return;
         }
-        input.value = "";
+        sharedState.pendingMemories = sharedState.pendingMemories.filter((item) => item.id !== pendingMemory.id);
         setSyncStatus("Запись сохранена в общей комнате.");
         await renderMemories();
       })
       .catch((error) => {
         submitButton.disabled = false;
         setSyncStatus(`Не получилось сохранить запись: ${error.message}`);
+        sharedState.pendingMemories = sharedState.pendingMemories.filter((item) => item.id !== pendingMemory.id);
+        input.value = text;
+        renderMemories();
         alert("Не получилось сохранить запись.");
       });
   });

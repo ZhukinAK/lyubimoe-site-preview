@@ -679,6 +679,10 @@ textarea:focus {
   padding: 18px;
 }
 
+.memory-card.pending {
+  opacity: 0.72;
+}
+
 .memory-card time {
   display: block;
   margin-bottom: 8px;
@@ -690,6 +694,14 @@ textarea:focus {
 .memory-card p {
   margin-bottom: 0;
   line-height: 1.6;
+}
+
+.memory-pending {
+  display: inline-block;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 750;
 }
 
 @media (max-width: 860px) {
