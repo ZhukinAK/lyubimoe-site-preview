@@ -7,10 +7,8 @@ const storageKeys = {
 
 const accessHash = "dbe56f2d3bf0ee960d5950fbb280f4f874c0e9a141eaf2db1fcbe399e813daab";
 const galleryBucket = "gallery";
-const appVersion = "android-rest-fallback-1";
+const appVersion = "gallery-fallback-1";
 const requestTimeoutMs = 180000;
-const readTimeoutMs = 15000;
-const imageTimeoutMs = 12000;
 const signedUrlTtlSeconds = 3600;
 const imagePlaceholder =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'%3E%3Crect width='1' height='1' fill='%23f8fbff'/%3E%3C/svg%3E";
@@ -42,10 +40,10 @@ function setGalleryStatus(message) {
   setStatus("#gallery-status", message);
 }
 
-function withTimeout(promise, message = "Запрос занял слишком много времени.", timeoutMs = requestTimeoutMs) {
+function withTimeout(promise, message = "Запрос занял слишком много времени.") {
   let timeoutId;
   const timeout = new Promise((_, reject) => {
-    timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
+    timeoutId = setTimeout(() => reject(new Error(message)), requestTimeoutMs);
   });
 
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
@@ -69,58 +67,6 @@ function blobToDataUrl(blob) {
     reader.addEventListener("error", () => reject(new Error("Не получилось прочитать картинку.")));
     reader.readAsDataURL(blob);
   });
-}
-
-function isAndroidBrowser() {
-  return /Android/i.test(navigator.userAgent);
-}
-
-async function downloadGalleryImageUrl(storagePath) {
-  const { data, error } = await retryOnce(() =>
-    withTimeout(
-      sharedState.supabase.storage.from(galleryBucket).download(storagePath),
-      "Картинка долго не отвечает.",
-      imageTimeoutMs
-    )
-  );
-
-  if (error || !data) throw error || new Error("Нет картинки.");
-  return blobToDataUrl(data);
-}
-
-async function getAuthToken() {
-  const { data } = await sharedState.supabase.auth.getSession();
-  return data?.session?.access_token || "";
-}
-
-async function restRequest(path, options = {}) {
-  const config = getSupabaseConfig();
-  const token = await getAuthToken();
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), options.timeoutMs || readTimeoutMs);
-
-  try {
-    const response = await fetch(`${config.url.replace(/\/+$/, "")}/rest/v1/${path}`, {
-      method: options.method || "GET",
-      headers: {
-        apikey: config.anonKey,
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-        Prefer: options.prefer || "return=representation"
-      },
-      body: options.body ? JSON.stringify(options.body) : undefined,
-      signal: controller.signal
-    });
-
-    if (!response.ok) {
-      throw new Error(`REST ${response.status}`);
-    }
-
-    if (response.status === 204) return null;
-    return response.json();
-  } finally {
-    clearTimeout(timeoutId);
-  }
 }
 
 const words = [
@@ -519,27 +465,20 @@ function getUploadExtension(blob) {
 }
 
 async function getGalleryItems() {
-  try {
-    const { data, error } = await retryOnce(() =>
-      withTimeout(
-        sharedState.supabase
-          .from("gallery_items")
-          .select("id, caption, storage_path, created_at")
-          .eq("room_id", sharedState.roomId)
-          .is("deleted_at", null)
-          .order("created_at", { ascending: false }),
-        "Галерея долго не отвечает.",
-        readTimeoutMs
-      )
-    );
+  const { data, error } = await retryOnce(() =>
+    withTimeout(
+      sharedState.supabase
+        .from("gallery_items")
+        .select("id, caption, storage_path, created_at")
+        .eq("room_id", sharedState.roomId)
+        .is("deleted_at", null)
+        .order("created_at", { ascending: false }),
+      "Галерея долго не отвечает."
+    )
+  );
 
-    if (error) throw error;
-    return data;
-  } catch {
-    return restRequest(
-      `gallery_items?select=id,caption,storage_path,created_at&room_id=eq.${sharedState.roomId}&deleted_at=is.null&order=created_at.desc`
-    );
-  }
+  if (error) throw error;
+  return data;
 }
 
 async function getGalleryImageUrl(storagePath) {
@@ -548,25 +487,11 @@ async function getGalleryImageUrl(storagePath) {
     return cached.url;
   }
 
-  if (isAndroidBrowser()) {
-    try {
-      const dataUrl = await downloadGalleryImageUrl(storagePath);
-      imageUrlCache.set(storagePath, {
-        url: dataUrl,
-        expiresAt: Date.now() + 10 * 60 * 1000
-      });
-      return dataUrl;
-    } catch {
-      // If Android cannot download the blob, fall through to a signed URL.
-    }
-  }
-
   try {
     const { data, error } = await retryOnce(() =>
       withTimeout(
         sharedState.supabase.storage.from(galleryBucket).createSignedUrl(storagePath, signedUrlTtlSeconds),
-        "Картинка долго не отвечает.",
-        imageTimeoutMs
+        "Картинка долго не отвечает."
       )
     );
 
@@ -576,8 +501,16 @@ async function getGalleryImageUrl(storagePath) {
       expiresAt: Date.now() + (signedUrlTtlSeconds - 60) * 1000
     });
     return data.signedUrl;
-  } catch {
-    const dataUrl = await downloadGalleryImageUrl(storagePath);
+  } catch (signedUrlError) {
+    const { data, error } = await retryOnce(() =>
+      withTimeout(
+        sharedState.supabase.storage.from(galleryBucket).download(storagePath),
+        "Картинка долго не отвечает."
+      )
+    );
+
+    if (error || !data) throw error || signedUrlError;
+    const dataUrl = await blobToDataUrl(data);
     imageUrlCache.set(storagePath, {
       url: dataUrl,
       expiresAt: Date.now() + 10 * 60 * 1000
@@ -849,44 +782,20 @@ function renderPendingMemories() {
 }
 
 async function getMemories() {
-  try {
-    const { data, error } = await retryOnce(() =>
-      withTimeout(
-        sharedState.supabase
-          .from("memories")
-          .select("id, text, created_at")
-          .eq("room_id", sharedState.roomId)
-          .is("deleted_at", null)
-          .order("created_at", { ascending: false }),
-        "Лента долго не отвечает.",
-        readTimeoutMs
-      )
-    );
+  const { data, error } = await retryOnce(() =>
+    withTimeout(
+      sharedState.supabase
+        .from("memories")
+        .select("id, text, created_at")
+        .eq("room_id", sharedState.roomId)
+        .is("deleted_at", null)
+        .order("created_at", { ascending: false }),
+      "Лента долго не отвечает."
+    )
+  );
 
-    if (error) throw error;
-    return data;
-  } catch {
-    return restRequest(
-      `memories?select=id,text,created_at&room_id=eq.${sharedState.roomId}&deleted_at=is.null&order=created_at.desc`
-    );
-  }
-}
-
-async function insertMemory(text) {
-  try {
-    const { error } = await withTimeout(
-      sharedState.supabase.from("memories").insert({ room_id: sharedState.roomId, text }),
-      "Сохранение долго не отвечает.",
-      readTimeoutMs
-    );
-    if (error) throw error;
-  } catch {
-    await restRequest("memories", {
-      method: "POST",
-      body: { room_id: sharedState.roomId, text },
-      timeoutMs: readTimeoutMs
-    });
-  }
+  if (error) throw error;
+  return data;
 }
 
 async function renderMemories() {
@@ -954,10 +863,20 @@ function initMemories() {
       setSyncStatus("Связь медленная, но запись ещё сохраняется.");
     }, 10000);
 
-    insertMemory(text)
-      .then(async () => {
+    sharedState.supabase
+      .from("memories")
+      .insert({ room_id: sharedState.roomId, text })
+      .then(async ({ error }) => {
         clearTimeout(slowSaveTimer);
         submitButton.disabled = false;
+        if (error) {
+          setSyncStatus(`Не получилось сохранить запись: ${error.message}`);
+          sharedState.pendingMemories = sharedState.pendingMemories.filter((item) => item.id !== pendingMemory.id);
+          input.value = text;
+          renderMemories();
+          alert("Не получилось сохранить запись.");
+          return;
+        }
         sharedState.pendingMemories = sharedState.pendingMemories.filter((item) => item.id !== pendingMemory.id);
         setSyncStatus("Запись сохранена в общей комнате.");
         await renderMemories();
