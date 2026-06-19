@@ -7,12 +7,13 @@ const storageKeys = {
 
 const accessHash = "dbe56f2d3bf0ee960d5950fbb280f4f874c0e9a141eaf2db1fcbe399e813daab";
 const galleryBucket = "gallery";
-const appVersion = "gallery-fallback-1";
+const appVersion = "phone-debug-1";
 const requestTimeoutMs = 180000;
 const signedUrlTtlSeconds = 3600;
 const imagePlaceholder =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'%3E%3Crect width='1' height='1' fill='%23f8fbff'/%3E%3C/svg%3E";
 const imageUrlCache = new Map();
+const debugMode = new URLSearchParams(location.search).has("debug");
 
 let sharedState = {
   supabase: null,
@@ -40,10 +41,10 @@ function setGalleryStatus(message) {
   setStatus("#gallery-status", message);
 }
 
-function withTimeout(promise, message = "Запрос занял слишком много времени.") {
+function withTimeout(promise, message = "Запрос занял слишком много времени.", timeoutMs = requestTimeoutMs) {
   let timeoutId;
   const timeout = new Promise((_, reject) => {
-    timeoutId = setTimeout(() => reject(new Error(message)), requestTimeoutMs);
+    timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
   });
 
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
@@ -66,6 +67,142 @@ function blobToDataUrl(blob) {
     reader.addEventListener("load", () => resolve(reader.result));
     reader.addEventListener("error", () => reject(new Error("Не получилось прочитать картинку.")));
     reader.readAsDataURL(blob);
+  });
+}
+
+function getDebugPanel() {
+  if (!debugMode) return null;
+  let panel = document.querySelector("#debug-panel");
+  if (panel) return panel;
+
+  panel = document.createElement("section");
+  panel.id = "debug-panel";
+  panel.style.cssText = [
+    "position:fixed",
+    "left:10px",
+    "right:10px",
+    "bottom:84px",
+    "z-index:9999",
+    "max-height:42vh",
+    "overflow:auto",
+    "padding:12px",
+    "border:1px solid #d9ccd2",
+    "border-radius:14px",
+    "background:#fff",
+    "box-shadow:0 12px 40px rgba(35,25,32,.18)",
+    "color:#302831",
+    "font:13px/1.45 system-ui,sans-serif",
+    "white-space:pre-wrap"
+  ].join(";");
+  panel.textContent = `Диагностика ${appVersion}\n`;
+  document.body.append(panel);
+  return panel;
+}
+
+function debugLog(message) {
+  const panel = getDebugPanel();
+  if (!panel) return;
+  panel.textContent += `${new Date().toLocaleTimeString("ru-RU")}  ${message}\n`;
+  panel.scrollTop = panel.scrollHeight;
+}
+
+async function debugStep(label, task) {
+  debugLog(`${label}: старт`);
+  try {
+    const result = await task();
+    debugLog(`${label}: OK ${result || ""}`);
+    return result;
+  } catch (error) {
+    debugLog(`${label}: ОШИБКА ${error.message || error}`);
+    return null;
+  }
+}
+
+function testImageUrl(url) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    const timeoutId = setTimeout(() => reject(new Error("img timeout")), 8000);
+    image.onload = () => {
+      clearTimeout(timeoutId);
+      resolve(`${image.naturalWidth}x${image.naturalHeight}`);
+    };
+    image.onerror = () => {
+      clearTimeout(timeoutId);
+      reject(new Error("img error"));
+    };
+    image.src = url;
+  });
+}
+
+async function runPhoneDiagnostics() {
+  if (!debugMode || !sharedState.supabase || !sharedState.roomId) return;
+  debugLog(`userAgent: ${navigator.userAgent}`);
+  debugLog(`roomId: ${sharedState.roomId}`);
+
+  await debugStep("auth session", async () => {
+    const { data } = await withTimeout(sharedState.supabase.auth.getSession(), "auth timeout", 8000);
+    return data?.session ? "session есть" : "session нет";
+  });
+
+  await debugStep("memories select", async () => {
+    const { data, error } = await withTimeout(
+      sharedState.supabase
+        .from("memories")
+        .select("id, text, created_at")
+        .eq("room_id", sharedState.roomId)
+        .is("deleted_at", null)
+        .limit(3),
+      "memories timeout",
+      8000
+    );
+    if (error) throw error;
+    return `${data.length} записей`;
+  });
+
+  const galleryItems = await debugStep("gallery select", async () => {
+    const { data, error } = await withTimeout(
+      sharedState.supabase
+        .from("gallery_items")
+        .select("id, caption, storage_path")
+        .eq("room_id", sharedState.roomId)
+        .is("deleted_at", null)
+        .limit(1),
+      "gallery timeout",
+      8000
+    );
+    if (error) throw error;
+    return data;
+  });
+
+  const firstItem = Array.isArray(galleryItems) ? galleryItems[0] : null;
+  if (!firstItem) {
+    debugLog("storage tests: нет фото для проверки");
+    return;
+  }
+
+  debugLog(`storage path: ${firstItem.storage_path}`);
+  const signedUrl = await debugStep("storage signedUrl", async () => {
+    const { data, error } = await withTimeout(
+      sharedState.supabase.storage.from(galleryBucket).createSignedUrl(firstItem.storage_path, 60),
+      "signedUrl timeout",
+      8000
+    );
+    if (error || !data?.signedUrl) throw error || new Error("нет signedUrl");
+    return data.signedUrl;
+  });
+
+  if (signedUrl) {
+    await debugStep("img signedUrl load", () => testImageUrl(signedUrl));
+  }
+
+  await debugStep("storage download", async () => {
+    const { data, error } = await withTimeout(
+      sharedState.supabase.storage.from(galleryBucket).download(firstItem.storage_path),
+      "download timeout",
+      8000
+    );
+    if (error || !data) throw error || new Error("нет blob");
+    return `${data.type || "blob"} ${data.size || 0} bytes`;
   });
 }
 
@@ -212,6 +349,9 @@ function startSharedRoom() {
   initGallery();
   initMemories();
   initRealtime();
+  if (debugMode) {
+    setTimeout(runPhoneDiagnostics, 1200);
+  }
 }
 
 function setRoute(route) {
