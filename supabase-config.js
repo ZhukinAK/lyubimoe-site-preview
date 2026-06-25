@@ -1,5 +1,4 @@
-window.LYUBIMOE_SUPABASE = {
-  url: "https://gtsqhvjhthveosultqjq.supabase.co",
-  anonKey: "sb_publishable_WEnMLjCrNly24uR98XQCcw_qO6XHF76",
+window.LYUBIMOE_API = {
+  url: "https://preview-api.bibizana-chi.ru",
   roomSlug: "preview"
 };

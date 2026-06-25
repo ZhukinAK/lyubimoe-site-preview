@@ -1,28 +1,26 @@
 const storageKeys = {
   auth: "twoplace.auth",
+  apiToken: "twoplace.apiToken",
   room: "twoplace.room",
   played: "twoplace.played",
   links: "twoplace.links"
 };
 
 const accessHash = "dbe56f2d3bf0ee960d5950fbb280f4f874c0e9a141eaf2db1fcbe399e813daab";
-const galleryBucket = "gallery";
-const appVersion = "clean-after-debug-1";
+const appVersion = "worker-proxy-v1";
 const requestTimeoutMs = 180000;
-const signedUrlTtlSeconds = 3600;
 const imagePlaceholder =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'%3E%3Crect width='1' height='1' fill='%23f8fbff'/%3E%3C/svg%3E";
-const imageUrlCache = new Map();
 
 let sharedState = {
-  supabase: null,
+  apiToken: null,
   roomId: null,
   initialized: false,
   galleryReady: false,
   memoriesReady: false,
   pendingMemories: [],
   memoriesCache: [],
-  realtimeChannel: null
+  pollTimer: null
 };
 
 function setStatus(selector, message) {
@@ -58,15 +56,6 @@ async function retryOnce(task) {
       throw error;
     });
   }
-}
-
-function blobToDataUrl(blob) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.addEventListener("load", () => resolve(reader.result));
-    reader.addEventListener("error", () => reject(new Error("Не получилось прочитать картинку.")));
-    reader.readAsDataURL(blob);
-  });
 }
 
 const words = [
@@ -106,26 +95,48 @@ function createId() {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function getSupabaseConfig() {
-  const config = window.LYUBIMOE_SUPABASE || {};
+function getApiConfig() {
+  const config = window.LYUBIMOE_API || {};
   return {
-    url: (config.url || "").trim(),
-    anonKey: (config.anonKey || "").trim(),
+    url: (config.url || "").replace(/\/+$/, ""),
     roomSlug: (config.roomSlug || "preview").trim()
   };
 }
 
-function getSupabaseClient() {
-  const config = getSupabaseConfig();
-  if (!config.url || !config.anonKey || !window.supabase?.createClient) {
-    return null;
+function hasApiConfig() {
+  return Boolean(getApiConfig().url);
+}
+
+async function apiRequest(path, options = {}) {
+  const config = getApiConfig();
+  const headers = new Headers(options.headers || {});
+
+  if (sharedState.apiToken) {
+    headers.set("Authorization", `Bearer ${sharedState.apiToken}`);
   }
 
-  if (!sharedState.supabase) {
-    sharedState.supabase = window.supabase.createClient(config.url, config.anonKey);
+  let body = options.body;
+  if (body && !(body instanceof FormData)) {
+    headers.set("Content-Type", "application/json");
+    body = JSON.stringify(body);
   }
 
-  return sharedState.supabase;
+  const response = await withTimeout(
+    fetch(`${config.url}${path}`, {
+      method: options.method || "GET",
+      headers,
+      body
+    }),
+    "Общая комната долго не отвечает."
+  );
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(text || `Ошибка ${response.status}`);
+  }
+
+  if (response.status === 204) return null;
+  return response.json();
 }
 
 async function hashText(text) {
@@ -144,10 +155,9 @@ function initAccessGate() {
   const input = document.querySelector("#auth-passphrase");
   const submit = form.querySelector("button");
   const error = document.querySelector("#auth-error");
-  const supabaseClient = getSupabaseClient();
 
-  if (!supabaseClient) {
-    error.textContent = "Нужно заполнить Supabase URL и anon key в supabase-config.js.";
+  if (!hasApiConfig()) {
+    error.textContent = "Нужно заполнить API URL в supabase-config.js.";
     submit.disabled = true;
     return;
   }
@@ -158,27 +168,25 @@ function initAccessGate() {
     submit.disabled = true;
 
     try {
-      const config = getSupabaseConfig();
-      let { data: sessionData } = await supabaseClient.auth.getSession();
-      if (!sessionData.session) {
-        const { error: signInError } = await supabaseClient.auth.signInAnonymously();
-        if (signInError) throw signInError;
-      }
-
+      const config = getApiConfig();
       const hash = await hashText(input.value.trim());
       if (hash !== accessHash) {
         throw new Error("Не та фраза.");
       }
 
-      const { data: roomId, error: joinError } = await supabaseClient.rpc("join_room", {
-        p_slug: config.roomSlug,
-        p_passphrase: input.value.trim()
+      const session = await apiRequest("/auth/join", {
+        method: "POST",
+        body: {
+          roomSlug: config.roomSlug,
+          passphrase: input.value.trim()
+        }
       });
-      if (joinError) throw joinError;
 
-      sharedState.roomId = roomId;
+      sharedState.roomId = session.roomId;
+      sharedState.apiToken = session.token;
       localStorage.setItem(storageKeys.auth, accessHash);
-      localStorage.setItem(storageKeys.room, roomId);
+      localStorage.setItem(storageKeys.room, session.roomId);
+      localStorage.setItem(storageKeys.apiToken, session.token);
       input.value = "";
       unlockRoom();
       startSharedRoom();
@@ -190,18 +198,15 @@ function initAccessGate() {
     }
   });
 
-  if (localStorage.getItem(storageKeys.auth) === accessHash && localStorage.getItem(storageKeys.room)) {
-    supabaseClient.auth.getSession().then(({ data }) => {
-      if (!data.session) {
-        localStorage.removeItem(storageKeys.auth);
-        localStorage.removeItem(storageKeys.room);
-        return;
-      }
-
-      sharedState.roomId = localStorage.getItem(storageKeys.room);
-      unlockRoom();
-      startSharedRoom();
-    });
+  if (
+    localStorage.getItem(storageKeys.auth) === accessHash &&
+    localStorage.getItem(storageKeys.room) &&
+    localStorage.getItem(storageKeys.apiToken)
+  ) {
+    sharedState.roomId = localStorage.getItem(storageKeys.room);
+    sharedState.apiToken = localStorage.getItem(storageKeys.apiToken);
+    unlockRoom();
+    startSharedRoom();
   }
 }
 
@@ -211,7 +216,7 @@ function startSharedRoom() {
   setSyncStatus("Общая комната подключена.");
   initGallery();
   initMemories();
-  initRealtime();
+  initPolling();
 }
 
 function setRoute(route) {
@@ -427,14 +432,10 @@ function fileToGalleryImage(file, onReady, onError) {
 }
 
 async function deleteGalleryItem(id) {
-  if (!sharedState.supabase || !sharedState.roomId) return;
-  const { error } = await sharedState.supabase
-    .from("gallery_items")
-    .update({ deleted_at: new Date().toISOString() })
-    .eq("id", id)
-    .eq("room_id", sharedState.roomId);
-
-  if (error) {
+  if (!sharedState.apiToken || !sharedState.roomId) return;
+  try {
+    await apiRequest(`/gallery/${encodeURIComponent(id)}`, { method: "DELETE" });
+  } catch {
     alert("Не получилось удалить карточку.");
     return;
   }
@@ -465,61 +466,15 @@ function getUploadExtension(blob) {
 }
 
 async function getGalleryItems() {
-  const { data, error } = await retryOnce(() =>
-    withTimeout(
-      sharedState.supabase
-        .from("gallery_items")
-        .select("id, caption, storage_path, created_at")
-        .eq("room_id", sharedState.roomId)
-        .is("deleted_at", null)
-        .order("created_at", { ascending: false }),
-      "Галерея долго не отвечает."
-    )
-  );
-
-  if (error) throw error;
-  return data;
+  const response = await retryOnce(() => apiRequest("/gallery"));
+  return response.items || [];
 }
 
-async function getGalleryImageUrl(storagePath) {
-  const cached = imageUrlCache.get(storagePath);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.url;
-  }
-
-  try {
-    const { data, error } = await retryOnce(() =>
-      withTimeout(
-        sharedState.supabase.storage.from(galleryBucket).createSignedUrl(storagePath, signedUrlTtlSeconds),
-        "Картинка долго не отвечает."
-      )
-    );
-
-    if (error || !data?.signedUrl) throw error || new Error("Нет ссылки на картинку.");
-    imageUrlCache.set(storagePath, {
-      url: data.signedUrl,
-      expiresAt: Date.now() + (signedUrlTtlSeconds - 60) * 1000
-    });
-    return data.signedUrl;
-  } catch (signedUrlError) {
-    const { data, error } = await retryOnce(() =>
-      withTimeout(
-        sharedState.supabase.storage.from(galleryBucket).download(storagePath),
-        "Картинка долго не отвечает."
-      )
-    );
-
-    if (error || !data) throw error || signedUrlError;
-    const dataUrl = await blobToDataUrl(data);
-    imageUrlCache.set(storagePath, {
-      url: dataUrl,
-      expiresAt: Date.now() + 10 * 60 * 1000
-    });
-    return dataUrl;
-  }
+function getGalleryImageUrl(id) {
+  return `${getApiConfig().url}/gallery/file/${encodeURIComponent(id)}?token=${encodeURIComponent(sharedState.apiToken)}`;
 }
 
-async function loadGalleryImage(image, storagePath) {
+function loadGalleryImage(image, id) {
   image.addEventListener(
     "error",
     () => {
@@ -528,16 +483,10 @@ async function loadGalleryImage(image, storagePath) {
     },
     { once: true }
   );
-
-  try {
-    image.src = await getGalleryImageUrl(storagePath);
-  } catch (error) {
-    image.alt = "Картинка пока не открылась";
-    setGalleryStatus(`Картинка пока не открылась: ${error.message}`);
-  }
+  image.src = getGalleryImageUrl(id);
 }
 
-async function openPhotoViewer(storagePath, caption) {
+function openPhotoViewer(id, caption) {
   const viewer = document.querySelector("#photo-viewer");
   const image = document.querySelector("#photo-viewer-image");
   const captionEl = document.querySelector("#photo-viewer-caption");
@@ -554,11 +503,7 @@ async function openPhotoViewer(storagePath, caption) {
     { once: true }
   );
 
-  try {
-    image.src = await getGalleryImageUrl(storagePath);
-  } catch (error) {
-    captionEl.textContent = `Картинка пока не открылась: ${error.message}`;
-  }
+  image.src = getGalleryImageUrl(id);
 }
 
 function closePhotoViewer() {
@@ -574,7 +519,7 @@ async function renderGallery() {
   const grid = document.querySelector("#gallery-grid");
   grid.innerHTML = "";
 
-  if (!sharedState.supabase || !sharedState.roomId) {
+  if (!sharedState.apiToken || !sharedState.roomId) {
     renderGalleryEmpty(grid);
     setGalleryStatus("Галерея ждёт входа.");
     return;
@@ -607,9 +552,9 @@ async function renderGallery() {
     image.src = imagePlaceholder;
     image.loading = "lazy";
     image.decoding = "async";
-    image.addEventListener("click", () => openPhotoViewer(item.storage_path, item.caption));
+    image.addEventListener("click", () => openPhotoViewer(item.id, item.caption));
     card.append(image);
-    loadGalleryImage(image, item.storage_path);
+    loadGalleryImage(image, item.id);
 
     const body = document.createElement("div");
     body.className = "gallery-card-body";
@@ -646,39 +591,23 @@ function initGallery() {
     event.preventDefault();
     const file = document.querySelector("#gallery-file").files[0];
     const caption = document.querySelector("#gallery-caption").value.trim();
-    if (!file || !sharedState.supabase || !sharedState.roomId) return;
+    if (!file || !sharedState.apiToken || !sharedState.roomId) return;
 
     const submitButton = event.target.querySelector("button");
     submitButton.disabled = true;
     setGalleryStatus("Готовим картинку...");
 
     const saveItem = async (blob) => {
-      const id = createId();
-      const extension = getUploadExtension(blob);
-      const storagePath = `${sharedState.roomId}/${id}.${extension}`;
       try {
         setSyncStatus("Загружаем картинку...");
         setGalleryStatus("Загружаем картинку...");
-        const { error: uploadError } = await withTimeout(
-          sharedState.supabase.storage.from(galleryBucket).upload(storagePath, blob, {
-            contentType: blob.type || "image/jpeg",
-            upsert: false
-          }),
-          "Загрузка картинки долго не отвечает."
-        );
-
-        if (uploadError) throw uploadError;
-
-        const { error: insertError } = await withTimeout(
-          sharedState.supabase.from("gallery_items").insert({
-            room_id: sharedState.roomId,
-            caption,
-            storage_path: storagePath
-          }),
-          "Сохранение карточки долго не отвечает."
-        );
-
-        if (insertError) throw insertError;
+        const formData = new FormData();
+        formData.append("file", blob, `photo.${getUploadExtension(blob)}`);
+        formData.append("caption", caption);
+        await apiRequest("/gallery", {
+          method: "POST",
+          body: formData
+        });
 
         event.target.reset();
         setSyncStatus("Картинка сохранена в общей комнате.");
@@ -708,14 +637,10 @@ function defaultMemories() {
 }
 
 async function deleteMemoryItem(id) {
-  if (!sharedState.supabase || !sharedState.roomId) return;
-  const { error } = await sharedState.supabase
-    .from("memories")
-    .update({ deleted_at: new Date().toISOString() })
-    .eq("id", id)
-    .eq("room_id", sharedState.roomId);
-
-  if (error) {
+  if (!sharedState.apiToken || !sharedState.roomId) return;
+  try {
+    await apiRequest(`/memories/${encodeURIComponent(id)}`, { method: "DELETE" });
+  } catch {
     alert("Не получилось удалить запись.");
     return;
   }
@@ -782,27 +707,15 @@ function renderPendingMemories() {
 }
 
 async function getMemories() {
-  const { data, error } = await retryOnce(() =>
-    withTimeout(
-      sharedState.supabase
-        .from("memories")
-        .select("id, text, created_at")
-        .eq("room_id", sharedState.roomId)
-        .is("deleted_at", null)
-        .order("created_at", { ascending: false }),
-      "Лента долго не отвечает."
-    )
-  );
-
-  if (error) throw error;
-  return data;
+  const response = await retryOnce(() => apiRequest("/memories"));
+  return response.items || [];
 }
 
 async function renderMemories() {
   const timeline = document.querySelector("#timeline");
   timeline.innerHTML = "";
 
-  if (!sharedState.supabase || !sharedState.roomId) {
+  if (!sharedState.apiToken || !sharedState.roomId) {
     renderMemoriesEmpty(timeline);
     return;
   }
@@ -842,7 +755,7 @@ function initMemories() {
     event.preventDefault();
     const input = document.querySelector("#memory-text");
     const text = input.value.trim();
-    if (!text || !sharedState.supabase || !sharedState.roomId) return;
+    if (!text || !sharedState.apiToken || !sharedState.roomId) return;
 
     const submitButton = event.target.querySelector("button");
     const pendingMemory = {
@@ -863,20 +776,13 @@ function initMemories() {
       setSyncStatus("Связь медленная, но запись ещё сохраняется.");
     }, 10000);
 
-    sharedState.supabase
-      .from("memories")
-      .insert({ room_id: sharedState.roomId, text })
-      .then(async ({ error }) => {
+    apiRequest("/memories", {
+      method: "POST",
+      body: { text }
+    })
+      .then(async () => {
         clearTimeout(slowSaveTimer);
         submitButton.disabled = false;
-        if (error) {
-          setSyncStatus(`Не получилось сохранить запись: ${error.message}`);
-          sharedState.pendingMemories = sharedState.pendingMemories.filter((item) => item.id !== pendingMemory.id);
-          input.value = text;
-          renderMemories();
-          alert("Не получилось сохранить запись.");
-          return;
-        }
         sharedState.pendingMemories = sharedState.pendingMemories.filter((item) => item.id !== pendingMemory.id);
         setSyncStatus("Запись сохранена в общей комнате.");
         await renderMemories();
@@ -894,36 +800,17 @@ function initMemories() {
   renderMemories();
 }
 
-function initRealtime() {
-  if (!sharedState.supabase || !sharedState.roomId) return;
-
-  if (sharedState.realtimeChannel) {
-    sharedState.supabase.removeChannel(sharedState.realtimeChannel);
+function initPolling() {
+  if (sharedState.pollTimer) {
+    clearInterval(sharedState.pollTimer);
   }
 
-  sharedState.realtimeChannel = sharedState.supabase
-    .channel(`room-${sharedState.roomId}`)
-    .on(
-      "postgres_changes",
-      {
-        event: "*",
-        schema: "public",
-        table: "gallery_items",
-        filter: `room_id=eq.${sharedState.roomId}`
-      },
-      () => renderGallery()
-    )
-    .on(
-      "postgres_changes",
-      {
-        event: "*",
-        schema: "public",
-        table: "memories",
-        filter: `room_id=eq.${sharedState.roomId}`
-      },
-      () => renderMemories()
-    )
-    .subscribe();
+  sharedState.pollTimer = setInterval(() => {
+    if (!document.hidden && sharedState.apiToken) {
+      renderGallery();
+      renderMemories();
+    }
+  }, 15000);
 }
 
 function defaultLinks() {
