@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Место для двоих</title>
-    <link rel="stylesheet" href="styles.css?v=memories-calendar-v1">
+    <link rel="stylesheet" href="styles.css?v=memories-calendar-compact-v1">
   </head>
   <body class="locked">
     <section class="auth-screen" aria-labelledby="auth-title">
@@ -166,10 +166,34 @@
         </section>
 
         <section class="view" id="memories" data-view>
-          <div class="section-heading">
-            <p class="eyebrow">Воспоминания</p>
-            <h2>Маленькая общая лента</h2>
-            <p>Можно оставить заметку, идею для вечера или фразу, которую не хочется потерять.</p>
+          <div class="memories-top">
+            <div class="section-heading">
+              <p class="eyebrow">Воспоминания</p>
+              <h2>Маленькая общая лента</h2>
+              <p>Можно оставить заметку, идею для вечера или фразу, которую не хочется потерять.</p>
+            </div>
+
+            <section class="memory-calendar" aria-label="Календарь воспоминаний">
+              <div class="calendar-header">
+                <button class="calendar-nav" type="button" id="calendar-prev" aria-label="Предыдущий месяц">‹</button>
+                <h3 id="calendar-title">Месяц</h3>
+                <button class="calendar-nav" type="button" id="calendar-next" aria-label="Следующий месяц">›</button>
+              </div>
+              <div class="calendar-weekdays" aria-hidden="true">
+                <span>пн</span>
+                <span>вт</span>
+                <span>ср</span>
+                <span>чт</span>
+                <span>пт</span>
+                <span>сб</span>
+                <span>вс</span>
+              </div>
+              <div class="calendar-grid" id="calendar-grid"></div>
+              <div class="calendar-filter hidden" id="calendar-filter">
+                <span id="calendar-filter-text"></span>
+                <button type="button" id="calendar-clear">Показать всё</button>
+              </div>
+            </section>
           </div>
 
           <form class="composer memory-composer" id="memory-form">
@@ -195,28 +219,6 @@
           </form>
           <p class="sync-status" id="sync-status">Общая комната подключается...</p>
 
-          <section class="memory-calendar" aria-label="Календарь воспоминаний">
-            <div class="calendar-header">
-              <button class="calendar-nav" type="button" id="calendar-prev" aria-label="Предыдущий месяц">‹</button>
-              <h3 id="calendar-title">Месяц</h3>
-              <button class="calendar-nav" type="button" id="calendar-next" aria-label="Следующий месяц">›</button>
-            </div>
-            <div class="calendar-weekdays" aria-hidden="true">
-              <span>пн</span>
-              <span>вт</span>
-              <span>ср</span>
-              <span>чт</span>
-              <span>пт</span>
-              <span>сб</span>
-              <span>вс</span>
-            </div>
-            <div class="calendar-grid" id="calendar-grid"></div>
-            <div class="calendar-filter hidden" id="calendar-filter">
-              <span id="calendar-filter-text"></span>
-              <button type="button" id="calendar-clear">Показать всё</button>
-            </div>
-          </section>
-
           <div class="timeline" id="timeline"></div>
         </section>
       </main>
@@ -228,7 +230,7 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="supabase-config.js?v=memories-calendar-v1"></script>
-    <script src="app.js?v=memories-calendar-v1"></script>
+    <script src="supabase-config.js?v=memories-calendar-compact-v1"></script>
+    <script src="app.js?v=memories-calendar-compact-v1"></script>
   </body>
 </html>
