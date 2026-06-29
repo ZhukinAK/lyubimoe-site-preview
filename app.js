@@ -7,7 +7,7 @@ const storageKeys = {
 
 const accessHash = "dbe56f2d3bf0ee960d5950fbb280f4f874c0e9a141eaf2db1fcbe399e813daab";
 const galleryBucket = "gallery";
-const appVersion = "clean-after-debug-1";
+const appVersion = "supabase-vpn-v1";
 const requestTimeoutMs = 180000;
 const signedUrlTtlSeconds = 3600;
 const imagePlaceholder =
