@@ -7,7 +7,6 @@ const storageKeys = {
 
 const accessHash = "dbe56f2d3bf0ee960d5950fbb280f4f874c0e9a141eaf2db1fcbe399e813daab";
 const galleryBucket = "gallery";
-const appVersion = "supabase-vpn-v1";
 const requestTimeoutMs = 180000;
 const signedUrlTtlSeconds = 3600;
 const imagePlaceholder =
@@ -22,6 +21,8 @@ let sharedState = {
   memoriesReady: false,
   pendingMemories: [],
   memoriesCache: [],
+  memoryCalendarMonth: null,
+  selectedMemoryDate: null,
   realtimeChannel: null
 };
 
@@ -104,6 +105,44 @@ function writeJson(key, value) {
 
 function createId() {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function toDateKey(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function todayKey() {
+  return toDateKey(new Date());
+}
+
+function dateFromKey(dateKey) {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  return new Date(year, month - 1, day);
+}
+
+function formatDateKey(dateKey) {
+  return dateFromKey(dateKey).toLocaleDateString("ru-RU", {
+    day: "numeric",
+    month: "long"
+  });
+}
+
+function formatMonthTitle(date) {
+  return date.toLocaleDateString("ru-RU", {
+    month: "long",
+    year: "numeric"
+  });
+}
+
+function startOfMonth(date) {
+  return new Date(date.getFullYear(), date.getMonth(), 1);
+}
+
+function getMemoryDate(item) {
+  return item.memory_date || toDateKey(new Date(item.created_at));
 }
 
 function getSupabaseConfig() {
@@ -615,6 +654,13 @@ async function renderGallery() {
     body.className = "gallery-card-body";
     const caption = document.createElement("p");
     caption.textContent = item.caption || "Без подписи";
+    const date = document.createElement("time");
+    date.className = "gallery-date";
+    date.dateTime = item.created_at;
+    date.textContent = new Date(item.created_at).toLocaleDateString("ru-RU", {
+      day: "numeric",
+      month: "long"
+    });
     const deleteButton = document.createElement("button");
     deleteButton.className = "gallery-delete";
     deleteButton.type = "button";
@@ -625,14 +671,14 @@ async function renderGallery() {
         deleteGalleryItem(item.id);
       }
     });
-    body.append(caption, deleteButton);
+    body.append(caption, date, deleteButton);
 
     card.append(body);
     grid.append(card);
   });
 
   setSyncStatus("Общая комната подключена.");
-  setGalleryStatus(`Галерея подключена. Версия ${appVersion}.`);
+  setGalleryStatus("Галерея подключена.");
 }
 
 function initGallery() {
@@ -707,6 +753,79 @@ function defaultMemories() {
   return [];
 }
 
+function getMemoryLabel(item) {
+  return item.label || "момент";
+}
+
+function renderMemoryCalendar() {
+  const calendar = document.querySelector("#calendar-grid");
+  const title = document.querySelector("#calendar-title");
+  const filter = document.querySelector("#calendar-filter");
+  const filterText = document.querySelector("#calendar-filter-text");
+  if (!calendar || !title || !filter || !filterText) return;
+
+  const month = sharedState.memoryCalendarMonth || startOfMonth(new Date());
+  sharedState.memoryCalendarMonth = month;
+  title.textContent = formatMonthTitle(month);
+  calendar.innerHTML = "";
+
+  const items = [...sharedState.memoriesCache, ...sharedState.pendingMemories];
+  const countsByDate = items.reduce((counts, item) => {
+    const key = getMemoryDate(item);
+    counts.set(key, (counts.get(key) || 0) + 1);
+    return counts;
+  }, new Map());
+
+  const firstDay = new Date(month.getFullYear(), month.getMonth(), 1);
+  const daysInMonth = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
+  const leadingDays = (firstDay.getDay() + 6) % 7;
+
+  for (let index = 0; index < leadingDays; index += 1) {
+    const spacer = document.createElement("span");
+    spacer.className = "calendar-day empty";
+    calendar.append(spacer);
+  }
+
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    const date = new Date(month.getFullYear(), month.getMonth(), day);
+    const key = toDateKey(date);
+    const count = countsByDate.get(key) || 0;
+    const button = document.createElement("button");
+    button.className = "calendar-day";
+    button.type = "button";
+    button.textContent = String(day);
+    button.setAttribute("aria-label", `${formatDateKey(key)}${count ? `, записей: ${count}` : ""}`);
+
+    if (key === todayKey()) {
+      button.classList.add("today");
+    }
+    if (count) {
+      button.classList.add("has-memory");
+    }
+    if (key === sharedState.selectedMemoryDate) {
+      button.classList.add("selected");
+    }
+
+    button.addEventListener("click", () => {
+      sharedState.selectedMemoryDate = key;
+      const dateInput = document.querySelector("#memory-date");
+      if (dateInput) {
+        dateInput.value = key;
+      }
+      renderMemoriesFromCache();
+    });
+    calendar.append(button);
+  }
+
+  if (sharedState.selectedMemoryDate) {
+    filter.classList.remove("hidden");
+    filterText.textContent = formatDateKey(sharedState.selectedMemoryDate);
+  } else {
+    filter.classList.add("hidden");
+    filterText.textContent = "";
+  }
+}
+
 async function deleteMemoryItem(id) {
   if (!sharedState.supabase || !sharedState.roomId) return;
   const { error } = await sharedState.supabase
@@ -739,14 +858,15 @@ function appendMemoryCard(timeline, item) {
     card.classList.add("pending");
   }
   const time = document.createElement("time");
-  time.dateTime = item.created_at;
-  time.textContent = new Date(item.created_at).toLocaleDateString("ru-RU", {
-    day: "numeric",
-    month: "long"
-  });
+  const memoryDate = getMemoryDate(item);
+  time.dateTime = memoryDate;
+  time.textContent = formatDateKey(memoryDate);
+  const label = document.createElement("span");
+  label.className = "memory-label";
+  label.textContent = getMemoryLabel(item);
   const text = document.createElement("p");
   text.textContent = item.text;
-  card.append(time, text);
+  card.append(time, label, text);
 
   if (item.pending) {
     const pendingNote = document.createElement("span");
@@ -770,10 +890,16 @@ function appendMemoryCard(timeline, item) {
   timeline.append(card);
 }
 
-function renderPendingMemories() {
+function getVisibleMemories(items) {
+  if (!sharedState.selectedMemoryDate) return items;
+  return items.filter((item) => getMemoryDate(item) === sharedState.selectedMemoryDate);
+}
+
+function renderMemoriesFromCache() {
   const timeline = document.querySelector("#timeline");
   timeline.innerHTML = "";
-  const items = [...sharedState.pendingMemories, ...sharedState.memoriesCache];
+  renderMemoryCalendar();
+  const items = getVisibleMemories([...sharedState.pendingMemories, ...sharedState.memoriesCache]);
   if (!items.length) {
     renderMemoriesEmpty(timeline);
     return;
@@ -786,9 +912,10 @@ async function getMemories() {
     withTimeout(
       sharedState.supabase
         .from("memories")
-        .select("id, text, created_at")
+        .select("id, text, memory_date, label, created_at")
         .eq("room_id", sharedState.roomId)
         .is("deleted_at", null)
+        .order("memory_date", { ascending: false })
         .order("created_at", { ascending: false }),
       "Лента долго не отвечает."
     )
@@ -803,6 +930,7 @@ async function renderMemories() {
   timeline.innerHTML = "";
 
   if (!sharedState.supabase || !sharedState.roomId) {
+    renderMemoryCalendar();
     renderMemoriesEmpty(timeline);
     return;
   }
@@ -813,22 +941,16 @@ async function renderMemories() {
     sharedState.memoriesCache = memories;
   } catch {
     if (sharedState.pendingMemories.length) {
-      renderPendingMemories();
+      renderMemoriesFromCache();
     } else {
+      renderMemoryCalendar();
       renderMemoriesEmpty(timeline);
     }
     setSyncStatus("Не получилось прочитать общую ленту.");
     return;
   }
 
-  memories = [...sharedState.pendingMemories, ...memories];
-
-  if (!memories.length) {
-    renderMemoriesEmpty(timeline);
-    return;
-  }
-
-  memories.forEach((item) => appendMemoryCard(timeline, item));
+  renderMemoriesFromCache();
 }
 
 function initMemories() {
@@ -837,6 +959,36 @@ function initMemories() {
     return;
   }
   sharedState.memoriesReady = true;
+  sharedState.memoryCalendarMonth = startOfMonth(new Date());
+
+  const dateInput = document.querySelector("#memory-date");
+  const labelInput = document.querySelector("#memory-label");
+  if (dateInput && !dateInput.value) {
+    dateInput.value = todayKey();
+  }
+
+  dateInput?.addEventListener("change", () => {
+    if (!dateInput.value) return;
+    sharedState.memoryCalendarMonth = startOfMonth(dateFromKey(dateInput.value));
+    renderMemoryCalendar();
+  });
+
+  document.querySelector("#calendar-prev")?.addEventListener("click", () => {
+    const month = sharedState.memoryCalendarMonth || startOfMonth(new Date());
+    sharedState.memoryCalendarMonth = new Date(month.getFullYear(), month.getMonth() - 1, 1);
+    renderMemoryCalendar();
+  });
+
+  document.querySelector("#calendar-next")?.addEventListener("click", () => {
+    const month = sharedState.memoryCalendarMonth || startOfMonth(new Date());
+    sharedState.memoryCalendarMonth = new Date(month.getFullYear(), month.getMonth() + 1, 1);
+    renderMemoryCalendar();
+  });
+
+  document.querySelector("#calendar-clear")?.addEventListener("click", () => {
+    sharedState.selectedMemoryDate = null;
+    renderMemoriesFromCache();
+  });
 
   document.querySelector("#memory-form").addEventListener("submit", (event) => {
     event.preventDefault();
@@ -845,9 +997,13 @@ function initMemories() {
     if (!text || !sharedState.supabase || !sharedState.roomId) return;
 
     const submitButton = event.target.querySelector("button");
+    const memoryDate = dateInput?.value || todayKey();
+    const label = labelInput?.value || "момент";
     const pendingMemory = {
       id: `pending-${createId()}`,
       text,
+      memory_date: memoryDate,
+      label,
       created_at: new Date().toISOString(),
       pending: true
     };
@@ -855,7 +1011,7 @@ function initMemories() {
     submitButton.disabled = true;
     input.value = "";
     sharedState.pendingMemories.unshift(pendingMemory);
-    renderPendingMemories();
+    renderMemoriesFromCache();
     setSyncStatus("Сохраняем запись...");
 
     const slowSaveTimer = setTimeout(() => {
@@ -865,7 +1021,7 @@ function initMemories() {
 
     sharedState.supabase
       .from("memories")
-      .insert({ room_id: sharedState.roomId, text })
+      .insert({ room_id: sharedState.roomId, text, memory_date: memoryDate, label })
       .then(async ({ error }) => {
         clearTimeout(slowSaveTimer);
         submitButton.disabled = false;
@@ -873,6 +1029,8 @@ function initMemories() {
           setSyncStatus(`Не получилось сохранить запись: ${error.message}`);
           sharedState.pendingMemories = sharedState.pendingMemories.filter((item) => item.id !== pendingMemory.id);
           input.value = text;
+          if (dateInput) dateInput.value = memoryDate;
+          if (labelInput) labelInput.value = label;
           renderMemories();
           alert("Не получилось сохранить запись.");
           return;
@@ -887,6 +1045,8 @@ function initMemories() {
         setSyncStatus(`Не получилось сохранить запись: ${error.message}`);
         sharedState.pendingMemories = sharedState.pendingMemories.filter((item) => item.id !== pendingMemory.id);
         input.value = text;
+        if (dateInput) dateInput.value = memoryDate;
+        if (labelInput) labelInput.value = label;
         renderMemories();
         alert("Не получилось сохранить запись.");
       });

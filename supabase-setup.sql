@@ -27,9 +27,33 @@ create table if not exists public.memories (
   id uuid primary key default extensions.gen_random_uuid(),
   room_id uuid not null references public.rooms(id) on delete cascade,
   text text not null,
+  memory_date date not null default current_date,
+  label text not null default 'момент',
   created_at timestamptz not null default now(),
   deleted_at timestamptz
 );
+
+alter table public.memories
+add column if not exists memory_date date;
+
+update public.memories
+set memory_date = created_at::date
+where memory_date is null;
+
+alter table public.memories
+alter column memory_date set default current_date,
+alter column memory_date set not null;
+
+alter table public.memories
+add column if not exists label text;
+
+update public.memories
+set label = 'момент'
+where label is null or label = '';
+
+alter table public.memories
+alter column label set default 'момент',
+alter column label set not null;
 
 create table if not exists public.game_sessions (
   id uuid primary key default extensions.gen_random_uuid(),
