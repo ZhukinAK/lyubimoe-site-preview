@@ -1111,9 +1111,12 @@ function renderLinks() {
   const grid = document.querySelector("#links-grid");
   grid.innerHTML = "";
 
-  links.forEach((item) => {
+  links.forEach((item, index) => {
+    const card = document.createElement("article");
+    card.className = "quick-link";
+
     const link = document.createElement("a");
-    link.className = "quick-link";
+    link.className = "quick-link-main";
     link.href = item.url;
     link.target = "_blank";
     link.rel = "noreferrer";
@@ -1130,7 +1133,21 @@ function renderLinks() {
     icon.textContent = "↗";
 
     link.append(body, icon);
-    grid.append(link);
+    const deleteButton = document.createElement("button");
+    deleteButton.className = "link-delete";
+    deleteButton.type = "button";
+    deleteButton.textContent = "Удалить";
+    deleteButton.setAttribute("aria-label", `Удалить ссылку: ${item.title}`);
+    deleteButton.addEventListener("click", () => {
+      if (!confirm("Удалить эту ссылку?")) return;
+      const currentLinks = readJson(storageKeys.links, defaultLinks());
+      currentLinks.splice(index, 1);
+      writeJson(storageKeys.links, currentLinks);
+      renderLinks();
+    });
+
+    card.append(link, deleteButton);
+    grid.append(card);
   });
 }
 

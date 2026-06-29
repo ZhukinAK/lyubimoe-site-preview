@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Место для двоих</title>
-    <link rel="stylesheet" href="styles.css?v=memories-calendar-compact-v1">
+    <link rel="stylesheet" href="styles.css?v=memories-layout-links-v1">
   </head>
   <body class="locked">
     <section class="auth-screen" aria-labelledby="auth-title">
@@ -167,10 +167,36 @@
 
         <section class="view" id="memories" data-view>
           <div class="memories-top">
-            <div class="section-heading">
-              <p class="eyebrow">Воспоминания</p>
-              <h2>Маленькая общая лента</h2>
-              <p>Можно оставить заметку, идею для вечера или фразу, которую не хочется потерять.</p>
+            <div class="memories-main">
+              <div class="section-heading">
+                <p class="eyebrow">Воспоминания</p>
+                <h2>Маленькая общая лента</h2>
+                <p>Можно оставить заметку, идею для вечера или фразу, которую не хочется потерять.</p>
+              </div>
+
+              <form class="composer memory-composer" id="memory-form">
+                <label class="memory-text-field">
+                  <span>Запись</span>
+                  <textarea id="memory-text" rows="3" maxlength="600" placeholder="Что добавим сюда?"></textarea>
+                </label>
+                <div class="memory-side-fields">
+                  <label>
+                    <span>Дата</span>
+                    <input type="date" id="memory-date">
+                  </label>
+                  <label>
+                    <span>Метка</span>
+                    <select id="memory-label">
+                      <option value="момент">момент</option>
+                      <option value="идея">идея</option>
+                      <option value="важное">важное</option>
+                      <option value="вечер">вечер</option>
+                      <option value="смешное">смешное</option>
+                    </select>
+                  </label>
+                </div>
+                <button class="button primary" type="submit">Сохранить</button>
+              </form>
             </div>
 
             <section class="memory-calendar" aria-label="Календарь воспоминаний">
@@ -195,28 +221,6 @@
               </div>
             </section>
           </div>
-
-          <form class="composer memory-composer" id="memory-form">
-            <label class="memory-text-field">
-              <span>Запись</span>
-              <textarea id="memory-text" rows="3" maxlength="600" placeholder="Что добавим сюда?"></textarea>
-            </label>
-            <label>
-              <span>Дата</span>
-              <input type="date" id="memory-date">
-            </label>
-            <label>
-              <span>Метка</span>
-              <select id="memory-label">
-                <option value="момент">момент</option>
-                <option value="идея">идея</option>
-                <option value="важное">важное</option>
-                <option value="вечер">вечер</option>
-                <option value="смешное">смешное</option>
-              </select>
-            </label>
-            <button class="button primary" type="submit">Сохранить</button>
-          </form>
           <p class="sync-status" id="sync-status">Общая комната подключается...</p>
 
           <div class="timeline" id="timeline"></div>
@@ -230,7 +234,7 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="supabase-config.js?v=memories-calendar-compact-v1"></script>
-    <script src="app.js?v=memories-calendar-compact-v1"></script>
+    <script src="supabase-config.js?v=memories-layout-links-v1"></script>
+    <script src="app.js?v=memories-layout-links-v1"></script>
   </body>
 </html>
