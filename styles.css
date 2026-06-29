@@ -728,7 +728,7 @@ textarea:focus {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
   gap: 18px;
-  align-items: start;
+  align-items: end;
   margin: 0 0 12px;
 }
 
@@ -741,7 +741,7 @@ textarea:focus {
 }
 
 .memory-calendar {
-  margin-top: 16px;
+  margin-top: 0;
   border: 1px solid var(--line);
   border-radius: 18px;
   padding: 12px;
