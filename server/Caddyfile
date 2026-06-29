@@ -1,0 +1,7 @@
+preview-api.bibizana-chi.ru {
+	reverse_proxy api:8000
+}
+
+:80 {
+	reverse_proxy api:8000
+}
