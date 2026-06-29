@@ -1,10 +1,12 @@
-# Supabase + Worker preview setup
+# Supabase preview setup
 
 Этот файл нужен только для `lyubimoe-site-preview`.
 
 ## 1. Создать project
 
-В Supabase создайте project. Anonymous sign-ins для frontend больше не нужны: preview-сайт ходит через Cloudflare Worker.
+В Supabase создайте новый project и включите anonymous sign-ins:
+
+`Authentication` -> `Sign In / Providers` -> `Anonymous Sign-Ins`.
 
 ## 2. Выполнить SQL
 
@@ -19,19 +21,18 @@ SQL создаёт:
 - RPC `join_room`;
 - Realtime publication для `gallery_items` и `memories`.
 
-Preview frontend больше не ходит в Supabase напрямую для общей комнаты. Таблицы и Storage остаются в Supabase, но браузер обращается к Cloudflare Worker `preview-api.bibizana-chi.ru`.
+## 3. Если SQL уже выполнялся раньше
 
-## 3. Cloudflare Worker
-
-См. `WORKER_PREVIEW.md`. В Worker нужно добавить secret `SUPABASE_SERVICE_ROLE_KEY`; в frontend этот ключ добавлять нельзя.
+Если `supabase-setup.sql` уже выполнялся, повторно запускать его для этой правки не нужно. Галерея получает временные ссылки на фото после входа в комнату.
 
 ## 4. Заполнить конфиг
 
-В `supabase-config.js` вставьте публичный URL preview API:
+В `supabase-config.js` вставьте публичные значения проекта:
 
 ```js
-window.LYUBIMOE_API = {
-  url: "https://preview-api.bibizana-chi.ru",
+window.LYUBIMOE_SUPABASE = {
+  url: "https://...supabase.co",
+  anonKey: "...",
   roomSlug: "preview"
 };
 ```
